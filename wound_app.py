@@ -122,19 +122,25 @@ def _in_streamlit_ctx() -> bool:
         return False
 
 
-def fetch_nearby_hospitals(lat: float, lon: float, rows: int = 50) -> list[dict]:
+def fetch_nearby_hospitals(lat: float, lon: float, rows: int = 50) -> tuple[list[dict], str]:
+    """Returns (hospitals, error_msg). error_msg is '' on success."""
     import requests, math
+    if not API_KEY:
+        return [], "API_KEY가 설정되지 않았습니다."
+
     params = {
         "serviceKey": API_KEY, "WGS84_LAT": lat, "WGS84_LON": lon,
         "pageNo": 1, "numOfRows": rows, "_type": "json",
     }
     try:
-        data = requests.get(
-            f"{API_BASE}/getEgytLcinfoInqire", params=params, timeout=5
-        ).json()
+        resp = requests.get(f"{API_BASE}/getEgytLcinfoInqire", params=params, timeout=8)
+        data = resp.json()
+        header = data.get("response", {}).get("header", {})
+        if header.get("resultCode") != "00":
+            return [], f"API 오류 ({header.get('resultCode')}): {header.get('resultMsg', '알 수 없는 오류')}"
         items = data["response"]["body"]["items"]
         if not items:
-            return []
+            return [], ""
         item = items["item"]
         hospitals = item if isinstance(item, list) else [item]
 
@@ -148,13 +154,10 @@ def fetch_nearby_hospitals(lat: float, lon: float, rows: int = 50) -> list[dict]
         for h in hospitals:
             h_lat = h.get("wgs84Lat") or h.get("latitude")
             h_lon = h.get("wgs84Lon") or h.get("longitude")
-            if h_lat and h_lon:
-                h["distance"] = round(haversine(lat, lon, float(h_lat), float(h_lon)), 2)
-            else:
-                h["distance"] = 9999
-        return hospitals
-    except Exception:
-        return []
+            h["distance"] = round(haversine(lat, lon, float(h_lat), float(h_lon)), 2) if h_lat and h_lon else 9999
+        return hospitals, ""
+    except Exception as e:
+        return [], f"요청 실패: {e}"
 
 
 def main():
@@ -425,16 +428,21 @@ def main():
             if search_btn:
                 lat, lon = CITIES[city]
                 with st.spinner("주변 응급의료기관을 검색 중입니다..."):
-                    st.session_state.hospitals_raw   = fetch_nearby_hospitals(lat, lon)
+                    raw, err = fetch_nearby_hospitals(lat, lon)
+                    st.session_state.hospitals_raw   = raw
+                    st.session_state.hospital_error  = err
                     st.session_state.hospital_city   = city
                     st.session_state.hospital_radius = radius_km
+
+            if st.session_state.get("hospital_error"):
+                st.error(f"병원 검색 오류: {st.session_state.hospital_error}")
 
             hospitals = [
                 h for h in st.session_state.hospitals_raw
                 if float(h.get("distance", 9999)) <= radius_km
             ]
 
-            if search_btn and not hospitals:
+            if search_btn and not hospitals and not st.session_state.get("hospital_error"):
                 st.warning("해당 반경 내 검색 결과가 없습니다. 반경을 늘려보세요.")
 
             if hospitals:
