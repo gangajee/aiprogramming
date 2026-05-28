@@ -196,30 +196,39 @@ def main():
     @st.cache_resource
     def load_models():
         import json
-        from tensorflow import keras
+        from ai_edge_litert.interpreter import Interpreter
 
-        type_model, type_classes, use_type = None, None, False
-        if os.path.exists("wound_model.keras") and os.path.exists("class_names.json"):
-            type_model = keras.models.load_model("wound_model.keras")
+        type_interp, type_classes, use_type = None, None, False
+        if os.path.exists("wound_model.tflite") and os.path.exists("class_names.json"):
+            type_interp = Interpreter("wound_model.tflite")
+            type_interp.allocate_tensors()
             with open("class_names.json", encoding="utf-8") as f:
                 type_classes = json.load(f)
             use_type = True
 
-        sev_model, sev_classes, use_sev = None, None, False
-        if os.path.exists("severity_model.keras") and os.path.exists("severity_class_names.json"):
-            sev_model = keras.models.load_model("severity_model.keras")
+        sev_interp, sev_classes, use_sev = None, None, False
+        if os.path.exists("severity_model.tflite") and os.path.exists("severity_class_names.json"):
+            sev_interp = Interpreter("severity_model.tflite")
+            sev_interp.allocate_tensors()
             with open("severity_class_names.json", encoding="utf-8") as f:
                 sev_classes = json.load(f)
             use_sev = True
 
-        return type_model, type_classes, use_type, sev_model, sev_classes, use_sev
+        return type_interp, type_classes, use_type, sev_interp, sev_classes, use_sev
 
     type_model, type_classes, USE_TYPE, sev_model, sev_classes, USE_SEV = load_models()
 
+    def _tflite_run(interp, arr):
+        inp = interp.get_input_details()[0]['index']
+        out = interp.get_output_details()[0]['index']
+        interp.set_tensor(inp, arr)
+        interp.invoke()
+        return interp.get_tensor(out)[0]
+
     def preprocess(pil_image):
-        from tensorflow import keras as _k
+        # MobileNetV2 preprocess_input: x / 127.5 - 1.0
         arr = np.array(pil_image.convert("RGB").resize((224, 224)), dtype=np.float32)
-        return np.expand_dims(_k.applications.mobilenet_v2.preprocess_input(arr), 0)
+        return np.expand_dims(arr / 127.5 - 1.0, 0)
 
     def analyze_wound(pil_image: Image.Image):
         """Returns (level, bar_pct, detected, primary_type, type_detail, sev_detail)"""
@@ -229,7 +238,7 @@ def main():
 
             # Model A: 진단명
             if USE_TYPE:
-                type_proba = type_model.predict(arr, verbose=0)[0]
+                type_proba = _tflite_run(type_model, arr)
                 raw = [type_classes[i] for i in np.argsort(type_proba)[::-1] if type_proba[i] >= 0.15][:2]
                 if not raw:
                     raw = [type_classes[int(np.argmax(type_proba))]]
@@ -245,7 +254,7 @@ def main():
 
             # Model B: 심각도
             if USE_SEV:
-                sev_proba = sev_model.predict(arr, verbose=0)[0]
+                sev_proba = _tflite_run(sev_model, arr)
                 sev_label = sev_classes[int(np.argmax(sev_proba))]
                 level = SEV_LABEL_TO_LEVEL.get(sev_label, 0)
                 # 각 클래스 확률을 구간 중심값으로 가중합산 → 게이지 위치
