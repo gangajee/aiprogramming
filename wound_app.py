@@ -224,6 +224,16 @@ def main():
         "출혈성 상처": 2, "감염 의심": 2, "화상": 2,
         "열상": 1, "타박상": 0, "찰과상": 0, "부종·염좌 의심": 0,
     }
+    # Model A 출력 클래스명 → 앱 표시 이름 변환
+    MODEL_TO_DISPLAY = {
+        "감염_의심":   "감염 의심",
+        "부종_염좌":   "부종·염좌 의심",
+        "출혈성_상처": "출혈성 상처",
+        "열상":        "열상",
+        "찰과상":      "찰과상",
+        "타박상":      "타박상",
+        "화상":        "화상",
+    }
 
     # ── 이미지 전처리 공통 함수 ───────────────────
     def preprocess_img(pil_image, size=(224, 224)):
@@ -241,19 +251,24 @@ def main():
             # ── Model A: 진단명 ────────────────────
             if USE_TYPE:
                 type_proba = type_model.predict(arr, verbose=0)[0]
-                detected = [
+                raw_detected = [
                     type_classes[i]
                     for i in np.argsort(type_proba)[::-1]
                     if type_proba[i] >= 0.15
                 ][:2]
-                if not detected:
-                    detected = [type_classes[int(np.argmax(type_proba))]]
+                if not raw_detected:
+                    raw_detected = [type_classes[int(np.argmax(type_proba))]]
+                # 모델 출력명 → 앱 표시명 변환
+                disp_detected = [MODEL_TO_DISPLAY.get(c, c) for c in raw_detected]
                 detected = sorted(
-                    [d for d in detected if d in SEVERITY_ORDER],
+                    [d for d in disp_detected if d in SEVERITY_ORDER],
                     key=lambda x: SEVERITY_ORDER.index(x),
-                ) or [type_classes[int(np.argmax(type_proba))]]
+                ) or disp_detected[:1]
                 primary_type = detected[0]
-                type_detail  = {c: f"{type_proba[i]:.1%}" for i, c in enumerate(type_classes)}
+                type_detail  = {
+                    MODEL_TO_DISPLAY.get(c, c): f"{type_proba[i]:.1%}"
+                    for i, c in enumerate(type_classes)
+                }
             else:
                 detected, primary_type = ["부종·염좌 의심"], "부종·염좌 의심"
                 type_detail = {}

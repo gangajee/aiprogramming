@@ -15,3 +15,10 @@ venv/
 # IDE
 .vscode/
 .idea/
+
+# 학습 데이터 (대용량 — git 미포함)
+wound_raw/
+extra_raw/
+dataset/
+dataset_severity/
+*.zip

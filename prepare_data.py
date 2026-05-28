@@ -1,65 +1,96 @@
 """
-Kaggle wound-dataset 다운로드 및 학습용 폴더 구조 생성
-  - dataset/          : Model A 진단명 분류용
-  - dataset_severity/ : Model B 심각도 분류용
+멀티소스 wound 데이터셋 병합 및 학습용 폴더 구조 생성
+  Sources:
+    1. wound_raw/          : yasinpratomo/wound-dataset (기존)
+    2. extra_raw/wound_classification/ : ibrahimfateen/wound-classification (추가)
+
+  출력:
+    - dataset/          : Model A 진단명 분류용
+    - dataset_severity/ : Model B 심각도 분류용
 
 실행:
-    pip install kaggle
-    # kaggle.json → ~/.kaggle/ 배치 후
     python3 prepare_data.py
 """
 
 import os, shutil, zipfile, random, json
 from pathlib import Path
 
-# ─────────────────────────────────────────────
-# 클래스 매핑
-# ─────────────────────────────────────────────
-# Kaggle 원본 → 진단명
-WOUND_TYPE_MAP = {
-    "Trauma":        "열상",
-    "Surgical":      "열상",
-    "Cellulitis":    "감염_의심",
-    "Arterial":      "출혈성_상처",
-    "Miscellaneous": "찰과상",
-    "Diabetic":      "부종_염좌",
-    "Pressure":      "부종_염좌",
-    "Venous":        "부종_염좌",
+IMG_EXTS   = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+TRAIN_RATIO = 0.80
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 소스별 클래스 매핑  →  (진단명, severity_level)
+#   severity:  0=자가처치  1=일반병원  2=응급실
+#   None 이면 해당 폴더 건너뜀
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Source 1: yasinpratomo/wound-dataset
+SOURCE1_MAP = {
+    "Abrasions":    ("찰과상",      0),
+    "Bruises":      ("타박상",      0),
+    "Burns":        ("화상",        2),
+    "Cut":          ("열상",        1),
+    "Ingrown_nails":("부종_염좌",   0),
+    "Laceration":   ("열상",        1),
+    "Stab_wound":   ("출혈성_상처", 2),
 }
 
-# Kaggle 원본 → 심각도 레벨
-#   0: 자가 처치 가능
-#   1: 일반 병원 진료 필요
-#   2: 응급실 방문 필요
-SEVERITY_MAP = {
-    "Arterial":      2,   # 동맥 손상 → 응급
-    "Cellulitis":    2,   # 감염 진행 → 응급
-    "Trauma":        1,   # 외상 → 병원
-    "Surgical":      1,   # 수술 후 처치 → 병원
-    "Diabetic":      1,   # 당뇨 궤양 → 병원
-    "Pressure":      1,   # 압박 궤양 → 병원
-    "Venous":        0,   # 정맥성 → 자가/경과 관찰
-    "Miscellaneous": 0,   # 기타 경미 → 자가
+# Source 2: ibrahimfateen/wound-classification
+SOURCE2_MAP = {
+    "Abrasions":       ("찰과상",    0),
+    "Bruises":         ("타박상",    0),
+    "Burns":           ("화상",      2),
+    "Cut":             ("열상",      1),
+    "Diabetic Wounds": ("감염_의심", 1),
+    "Laseration":      ("열상",      1),   # 오타 폴더명
+    "Normal":          None,               # 정상 이미지 — 건너뜀
+    "Pressure Wounds": ("부종_염좌", 1),
+    "Surgical Wounds": ("열상",      1),
+    "Venous Wounds":   ("감염_의심", 1),
 }
 
 SEVERITY_LABEL = {0: "자가처치", 1: "일반병원", 2: "응급실"}
 
-TRAIN_RATIO = 0.80
-RAW_DIR     = Path("wound_raw")
-IMG_EXTS    = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
-
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # 유틸
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 def copy_images(images: list[Path], dest_dir: Path):
     dest_dir.mkdir(parents=True, exist_ok=True)
+    seen: set[str] = set()
     for img in images:
-        dst = dest_dir / img.name
-        # 파일명 충돌 방지
+        name = img.name
+        if name in seen:
+            name = f"{img.stem}_{img.parent.name}{img.suffix}"
+        seen.add(name)
+        dst = dest_dir / name
         if dst.exists():
-            dst = dest_dir / f"{img.stem}_{img.parent.name}{img.suffix}"
+            name = f"{img.stem}_{img.parent.parent.name}_{img.parent.name}{img.suffix}"
+            dst = dest_dir / name
         shutil.copy2(img, dst)
+
+
+def collect_from_source(root: Path, cls_map: dict) -> tuple[dict, dict]:
+    """root 안의 폴더를 cls_map 으로 분류해 (type_images, severity_images) 반환"""
+    type_images:     dict[str, list[Path]] = {}
+    severity_images: dict[int,  list[Path]] = {}
+
+    for cls_dir in sorted(root.iterdir()):
+        if not cls_dir.is_dir():
+            continue
+        mapping = cls_map.get(cls_dir.name)
+        if mapping is None:
+            print(f"    skip: {cls_dir.name}")
+            continue
+        wt, sev = mapping
+        images = [f for f in cls_dir.rglob("*") if f.suffix.lower() in IMG_EXTS]
+        if not images:
+            continue
+        print(f"    {cls_dir.name:20s} → {wt:10s}  sev={sev}  ({len(images)}장)")
+        type_images.setdefault(wt,  []).extend(images)
+        severity_images.setdefault(sev, []).extend(images)
+
+    return type_images, severity_images
 
 
 def print_summary(dataset_dir: Path, label: str):
@@ -74,131 +105,108 @@ def print_summary(dataset_dir: Path, label: str):
             print(f"    {cls_dir.name:20s} {n:4d}장")
 
 
-# ─────────────────────────────────────────────
-# Step 1. 다운로드
-# ─────────────────────────────────────────────
-def download():
-    zip_path = Path("wound-dataset.zip")
-    if zip_path.exists():
-        print("✅ zip 파일 이미 존재 — 다운로드 생략")
-        return
-    print("📥 Kaggle 데이터셋 다운로드 중...")
-    ret = os.system("kaggle datasets download -d yasinpratomo/wound-dataset")
-    if ret != 0:
-        print("\n❌ 실패. 확인사항:")
-        print("  pip install kaggle")
-        print("  ~/.kaggle/kaggle.json 존재 여부")
-        print("  chmod 600 ~/.kaggle/kaggle.json")
-        raise SystemExit(1)
-    print("✅ 다운로드 완료")
-
-
-# ─────────────────────────────────────────────
-# Step 2. 압축 해제
-# ─────────────────────────────────────────────
-def extract():
-    if RAW_DIR.exists():
-        print("✅ 압축 해제 폴더 이미 존재 — 생략")
-        return
-    print("📦 압축 해제 중...")
-    with zipfile.ZipFile("wound-dataset.zip") as z:
-        z.extractall(RAW_DIR)
-    print(f"✅ {RAW_DIR}/ 압축 해제 완료")
-
-    print("\n📂 원본 구조 (2단계까지):")
-    for p in sorted(RAW_DIR.rglob("*")):
-        depth = len(p.relative_to(RAW_DIR).parts)
-        if depth <= 2:
-            print("  " * (depth - 1) + ("📁 " if p.is_dir() else "🖼  ") + p.name)
-
-
-# ─────────────────────────────────────────────
-# Step 3. wound_main 위치 탐색
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 1. Source 1 위치 탐색
+# ─────────────────────────────────────────────────────────────────────────────
 def find_wound_main() -> Path:
-    for candidate in RAW_DIR.rglob("wound_main"):
-        if candidate.is_dir():
-            return candidate
-    # fallback: 직접 클래스 폴더가 있는 곳 탐색
-    for p in RAW_DIR.rglob("Trauma"):
-        return p.parent
-    raise FileNotFoundError("wound_main 폴더를 찾을 수 없습니다. 폴더 구조를 확인하세요.")
+    raw_dir = Path("wound_raw")
+    known = set(SOURCE1_MAP.keys())
+    for p in raw_dir.rglob("*"):
+        if p.is_dir() and p.name in known:
+            return p.parent
+    raise FileNotFoundError(
+        f"wound_raw/ 안에서 클래스 폴더를 찾지 못했습니다.\n예상: {sorted(known)}"
+    )
 
 
-# ─────────────────────────────────────────────
-# Step 4. 두 데이터셋 동시 구성
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 2. Source 2 위치 탐색
+# ─────────────────────────────────────────────────────────────────────────────
+def find_wound_classification() -> Path:
+    base = Path("extra_raw/wound_classification")
+    known = set(SOURCE2_MAP.keys())
+    for p in base.rglob("*"):
+        if p.is_dir() and p.name in known:
+            return p.parent
+    raise FileNotFoundError(
+        f"extra_raw/wound_classification/ 안에서 클래스 폴더를 찾지 못했습니다."
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 3. 병합 및 분할
+# ─────────────────────────────────────────────────────────────────────────────
 def reorganize():
     dataset_a = Path("dataset")
     dataset_b = Path("dataset_severity")
 
-    if dataset_a.exists() and dataset_b.exists():
-        print("✅ dataset/, dataset_severity/ 이미 존재 — 생략")
-        return
+    if dataset_a.exists():
+        shutil.rmtree(dataset_a)
+        print("기존 dataset/ 삭제")
+    if dataset_b.exists():
+        shutil.rmtree(dataset_b)
+        print("기존 dataset_severity/ 삭제")
 
-    wound_dir = find_wound_main()
-    print(f"\n🔍 원본 폴더: {wound_dir}")
+    all_type:     dict[str, list[Path]] = {}
+    all_severity: dict[int,  list[Path]] = {}
 
-    # 클래스별 이미지 수집
-    print("\n📊 원본 클래스별 이미지 수:")
-    class_images: dict[str, list[Path]] = {}
-    for cls_dir in sorted(wound_dir.iterdir()):
-        if not cls_dir.is_dir():
-            continue
-        images = [f for f in cls_dir.rglob("*") if f.suffix.lower() in IMG_EXTS]
-        if not images:
-            continue
-        class_images[cls_dir.name] = images
-        wt  = WOUND_TYPE_MAP.get(cls_dir.name, cls_dir.name)
-        sev = SEVERITY_LABEL.get(SEVERITY_MAP.get(cls_dir.name, -1), "?")
-        print(f"  {cls_dir.name:15s} → 진단명:{wt:12s} / 심각도:{sev}  ({len(images)}장)")
+    def merge(t, s):
+        for k, v in t.items(): all_type.setdefault(k, []).extend(v)
+        for k, v in s.items(): all_severity.setdefault(k, []).extend(v)
 
-    # 진단명 / 심각도 별로 이미지 합산
-    type_images:     dict[str, list[Path]] = {}
-    severity_images: dict[int,  list[Path]] = {}
+    # ── Source 1 ──────────────────────────────────
+    print("\n[Source 1] yasinpratomo/wound-dataset")
+    src1 = find_wound_main()
+    t, s = collect_from_source(src1, SOURCE1_MAP)
+    merge(t, s)
 
-    for orig_cls, images in class_images.items():
-        wt  = WOUND_TYPE_MAP.get(orig_cls, orig_cls)
-        sev = SEVERITY_MAP.get(orig_cls, 0)
-        type_images.setdefault(wt,  []).extend(images)
-        severity_images.setdefault(sev, []).extend(images)
+    # ── Source 2 ──────────────────────────────────
+    print("\n[Source 2] ibrahimfateen/wound-classification")
+    src2 = find_wound_classification()
+    t, s = collect_from_source(src2, SOURCE2_MAP)
+    merge(t, s)
+
+    # ── 총계 ──────────────────────────────────────
+    total = sum(len(v) for v in all_type.values())
+    print(f"\n병합 완료 — 총 {total}장")
+    print("\n[진단명별]")
+    for k, v in sorted(all_type.items()):
+        print(f"  {k:12s}: {len(v):4d}장")
+    print("\n[심각도별]")
+    for k in sorted(all_severity):
+        print(f"  {SEVERITY_LABEL[k]:6s}: {len(all_severity[k]):4d}장")
 
     # ── Model A: 진단명 데이터셋 ──────────────────
     print("\n📁 dataset/ (진단명) 생성 중...")
-    for cls_name, images in type_images.items():
+    for cls_name, images in all_type.items():
         random.shuffle(images)
         split = int(len(images) * TRAIN_RATIO)
         copy_images(images[:split], dataset_a / "train" / cls_name)
         copy_images(images[split:], dataset_a / "val"   / cls_name)
 
-    # ── Model B: 심각도 데이터셋 ─────────────────
+    # ── Model B: 심각도 데이터셋 ──────────────────
     print("📁 dataset_severity/ (심각도) 생성 중...")
-    for sev_level, images in severity_images.items():
+    for sev_level, images in all_severity.items():
         cls_name = SEVERITY_LABEL[sev_level]
         random.shuffle(images)
         split = int(len(images) * TRAIN_RATIO)
         copy_images(images[:split], dataset_b / "train" / cls_name)
         copy_images(images[split:], dataset_b / "val"   / cls_name)
 
-    # ── 요약 출력 ────────────────────────────────
+    # ── 요약 ────────────────────────────────────
     print("\n✅ 완료!")
     print_summary(dataset_a, "Model A — 진단명")
     print_summary(dataset_b, "Model B — 심각도")
 
-    # class_names 미리 저장 (학습 전 확인용)
     a_classes = sorted([d.name for d in (dataset_a / "train").iterdir()])
     b_classes = sorted([d.name for d in (dataset_b / "train").iterdir()])
     with open("class_names_preview.json", "w", encoding="utf-8") as f:
         json.dump({"wound_type": a_classes, "severity": b_classes},
                   f, ensure_ascii=False, indent=2)
-
-    print(f"\n다음 단계:")
-    print("  python3 train_model.py          ← Model A 학습 (진단명)")
-    print("  python3 train_severity_model.py ← Model B 학습 (심각도)")
+    print(f"\n진단명 클래스: {a_classes}")
+    print(f"심각도 클래스: {b_classes}")
 
 
 if __name__ == "__main__":
     random.seed(42)
-    download()
-    extract()
     reorganize()

@@ -75,6 +75,17 @@ def build_model(num_classes: int) -> keras.Model:
     return keras.Model(inputs, outputs, name="severity_classifier")
 
 
+def compute_class_weights(train_ds, num_classes):
+    """클래스 불균형 보정용 가중치 계산"""
+    counts = np.zeros(num_classes, dtype=np.int64)
+    for _, y_batch in train_ds:
+        for label in y_batch.numpy():
+            counts[label] += 1
+    total = counts.sum()
+    weights = {i: total / (num_classes * c) for i, c in enumerate(counts) if c > 0}
+    return weights
+
+
 def train():
     print("=" * 55)
     print("  Model B: 심각도 분류 모델 학습")
@@ -84,6 +95,9 @@ def train():
     num_classes = len(class_names)
     model = build_model(num_classes)
 
+    class_weights = compute_class_weights(train_ds, num_classes)
+    print(f"\n클래스 가중치: { {class_names[i]: f'{w:.2f}' for i, w in class_weights.items()} }")
+
     # Phase 1: 헤드만 학습
     print(f"\n[Phase 1] 분류 헤드 학습 ({EPOCHS_FROZEN} epochs)")
     model.compile(
@@ -92,6 +106,7 @@ def train():
         metrics=["accuracy"],
     )
     model.fit(train_ds, validation_data=val_ds, epochs=EPOCHS_FROZEN,
+              class_weight=class_weights,
               callbacks=[keras.callbacks.EarlyStopping(patience=3,
                          restore_best_weights=True)])
 
@@ -109,6 +124,7 @@ def train():
         metrics=["accuracy"],
     )
     model.fit(train_ds, validation_data=val_ds, epochs=EPOCHS_FINETUNE,
+              class_weight=class_weights,
               callbacks=[
                   keras.callbacks.EarlyStopping(patience=3, restore_best_weights=True),
                   keras.callbacks.ModelCheckpoint(
