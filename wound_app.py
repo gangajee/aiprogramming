@@ -123,7 +123,7 @@ def _in_streamlit_ctx() -> bool:
 
 
 def fetch_nearby_hospitals(lat: float, lon: float, rows: int = 50) -> list[dict]:
-    import requests
+    import requests, math
     params = {
         "serviceKey": API_KEY, "WGS84_LAT": lat, "WGS84_LON": lon,
         "pageNo": 1, "numOfRows": rows, "_type": "json",
@@ -136,7 +136,23 @@ def fetch_nearby_hospitals(lat: float, lon: float, rows: int = 50) -> list[dict]
         if not items:
             return []
         item = items["item"]
-        return item if isinstance(item, list) else [item]
+        hospitals = item if isinstance(item, list) else [item]
+
+        def haversine(lat1, lon1, lat2, lon2):
+            R = 6371.0
+            dlat = math.radians(lat2 - lat1)
+            dlon = math.radians(lon2 - lon1)
+            a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
+            return R * 2 * math.asin(math.sqrt(a))
+
+        for h in hospitals:
+            h_lat = h.get("wgs84Lat") or h.get("latitude")
+            h_lon = h.get("wgs84Lon") or h.get("longitude")
+            if h_lat and h_lon:
+                h["distance"] = round(haversine(lat, lon, float(h_lat), float(h_lon)), 2)
+            else:
+                h["distance"] = 9999
+        return hospitals
     except Exception:
         return []
 
@@ -439,7 +455,8 @@ def main():
                 pin_border = "#7f1d1d" if level == 2 else "#713f12"
 
                 for h in hospitals:
-                    h_lat, h_lon = h.get("latitude"), h.get("longitude")
+                    h_lat = h.get("wgs84Lat") or h.get("latitude")
+                    h_lon = h.get("wgs84Lon") or h.get("longitude")
                     if not h_lat or not h_lon:
                         continue
                     name = h.get("dutyName", "병원")
