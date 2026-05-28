@@ -188,72 +188,94 @@ def main():
 
     # ── 모델 로드 (캐시: 앱 재실행 시 재로드 방지) ──
     @st.cache_resource
-    def load_model():
-        import json, tensorflow as tf
+    def load_models():
+        import json
         from tensorflow import keras
 
-        MODEL_PATH  = "wound_model.keras"
-        NAMES_PATH  = "class_names.json"
-        USE_CNN     = os.path.exists(MODEL_PATH) and os.path.exists(NAMES_PATH)
+        # Model A: 진단명
+        type_model, type_classes, use_type = None, None, False
+        if os.path.exists("wound_model.keras") and os.path.exists("class_names.json"):
+            type_model = keras.models.load_model("wound_model.keras")
+            with open("class_names.json", encoding="utf-8") as f:
+                type_classes = json.load(f)
+            use_type = True
 
-        if USE_CNN:
-            model = keras.models.load_model(MODEL_PATH)
-            with open(NAMES_PATH, encoding="utf-8") as f:
-                class_names = json.load(f)
-            return model, class_names, True
-        return None, None, False   # 모델 없으면 HSV 폴백
+        # Model B: 심각도
+        sev_model, sev_classes, use_sev = None, None, False
+        if os.path.exists("severity_model.keras") and os.path.exists("severity_class_names.json"):
+            sev_model = keras.models.load_model("severity_model.keras")
+            with open("severity_class_names.json", encoding="utf-8") as f:
+                sev_classes = json.load(f)
+            use_sev = True
 
-    cnn_model, cnn_classes, USE_CNN = load_model()
+        return type_model, type_classes, use_type, sev_model, sev_classes, use_sev
+
+    type_model, type_classes, USE_TYPE, sev_model, sev_classes, USE_SEV = load_models()
+    USE_CNN = USE_TYPE or USE_SEV
 
     # ── 심각도 순서 (전역 공유) ───────────────────
     SEVERITY_ORDER = [
         "출혈성 상처", "감염 의심", "화상",
         "열상", "타박상", "찰과상", "부종·염좌 의심",
     ]
+    # 심각도 클래스명 → 레벨 번호 매핑
+    SEV_LABEL_TO_LEVEL = {"자가처치": 0, "일반병원": 1, "응급실": 2}
+    TYPE_TO_LEVEL = {
+        "출혈성 상처": 2, "감염 의심": 2, "화상": 2,
+        "열상": 1, "타박상": 0, "찰과상": 0, "부종·염좌 의심": 0,
+    }
+
+    # ── 이미지 전처리 공통 함수 ───────────────────
+    def preprocess_img(pil_image, size=(224, 224)):
+        from tensorflow import keras as _k
+        arr = np.array(pil_image.convert("RGB").resize(size), dtype=np.float32)
+        arr = _k.applications.mobilenet_v2.preprocess_input(arr)
+        return np.expand_dims(arr, axis=0)
 
     # ── 외상 분석 함수 ────────────────────────────
     def analyze_wound(pil_image: Image.Image) -> tuple:
 
         if USE_CNN:
-            # ── CNN 경로: MobileNetV2 학습 모델 사용 ──
-            from tensorflow import keras as _keras
-            img = pil_image.convert("RGB").resize((224, 224))
-            arr = np.array(img, dtype=np.float32)
-            arr = _keras.applications.mobilenet_v2.preprocess_input(arr)
-            arr = np.expand_dims(arr, axis=0)           # (1, 224, 224, 3)
+            arr = preprocess_img(pil_image)
 
-            proba = cnn_model.predict(arr, verbose=0)[0]  # 클래스별 확률
+            # ── Model A: 진단명 ────────────────────
+            if USE_TYPE:
+                type_proba = type_model.predict(arr, verbose=0)[0]
+                detected = [
+                    type_classes[i]
+                    for i in np.argsort(type_proba)[::-1]
+                    if type_proba[i] >= 0.15
+                ][:2]
+                if not detected:
+                    detected = [type_classes[int(np.argmax(type_proba))]]
+                detected = sorted(
+                    [d for d in detected if d in SEVERITY_ORDER],
+                    key=lambda x: SEVERITY_ORDER.index(x),
+                ) or [type_classes[int(np.argmax(type_proba))]]
+                primary_type = detected[0]
+                type_detail  = {c: f"{type_proba[i]:.1%}" for i, c in enumerate(type_classes)}
+            else:
+                detected, primary_type = ["부종·염좌 의심"], "부종·염좌 의심"
+                type_detail = {}
 
-            # 상위 2개 진단명 추출 (확률 15% 이상)
-            detected = [
-                cnn_classes[i]
-                for i in np.argsort(proba)[::-1]
-                if proba[i] >= 0.15
-            ][:2]
-            if not detected:
-                detected = [cnn_classes[int(np.argmax(proba))]]
+            # ── Model B: 심각도 ────────────────────
+            if USE_SEV:
+                sev_proba = sev_model.predict(arr, verbose=0)[0]
+                sev_label = sev_classes[int(np.argmax(sev_proba))]
+                level     = SEV_LABEL_TO_LEVEL.get(sev_label, 0)
+                score     = float(np.max(sev_proba))
+                sev_detail = {c: f"{sev_proba[i]:.1%}" for i, c in enumerate(sev_classes)}
+            else:
+                # Model B 없으면 진단명으로 심각도 추정
+                level     = TYPE_TO_LEVEL.get(primary_type, 0)
+                score     = float(type_proba[np.argmax(type_proba)]) if USE_TYPE else 0.5
+                sev_detail = {}
 
-            # 심각도 순 정렬
-            detected = sorted(
-                [d for d in detected if d in SEVERITY_ORDER],
-                key=lambda x: SEVERITY_ORDER.index(x),
-            ) or [cnn_classes[int(np.argmax(proba))]]
-
-            primary_type = detected[0]
-            top_score    = float(proba[np.argmax(proba)])
-
-            # 응급도 레벨: primary_type 기준 매핑
-            level_map = {
-                "출혈성 상처": 2, "감염 의심": 1, "화상": 2,
-                "열상": 1, "타박상": 0, "찰과상": 0, "부종·염좌 의심": 0,
-            }
-            level = level_map.get(primary_type, 0)
-            score = top_score
-
-            detail = {
-                c: f"{proba[i]:.1%}"
-                for i, c in enumerate(cnn_classes)
-            }
+            detail = {"── 진단명 확률 ──": ""}
+            detail.update(type_detail)
+            if sev_detail:
+                detail["── 심각도 확률 ──"] = ""
+                detail.update(sev_detail)
 
         else:
             # ── HSV 폴백: 모델 파일 없을 때 ──────────
