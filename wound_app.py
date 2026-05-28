@@ -186,73 +186,120 @@ def main():
         unsafe_allow_html=True,
     )
 
+    # ── 모델 로드 (캐시: 앱 재실행 시 재로드 방지) ──
+    @st.cache_resource
+    def load_model():
+        import json, tensorflow as tf
+        from tensorflow import keras
+
+        MODEL_PATH  = "wound_model.keras"
+        NAMES_PATH  = "class_names.json"
+        USE_CNN     = os.path.exists(MODEL_PATH) and os.path.exists(NAMES_PATH)
+
+        if USE_CNN:
+            model = keras.models.load_model(MODEL_PATH)
+            with open(NAMES_PATH, encoding="utf-8") as f:
+                class_names = json.load(f)
+            return model, class_names, True
+        return None, None, False   # 모델 없으면 HSV 폴백
+
+    cnn_model, cnn_classes, USE_CNN = load_model()
+
+    # ── 심각도 순서 (전역 공유) ───────────────────
+    SEVERITY_ORDER = [
+        "출혈성 상처", "감염 의심", "화상",
+        "열상", "타박상", "찰과상", "부종·염좌 의심",
+    ]
+
     # ── 외상 분석 함수 ────────────────────────────
     def analyze_wound(pil_image: Image.Image) -> tuple:
-        img = pil_image.convert("RGB").resize((256, 256))
-        arr = np.array(img, dtype=np.float32)
-        r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
 
-        # ── 기본 색상 피처 ────────────────────────
-        red_mask       = (r > 140) & (r > g + 25) & (r > b + 25)
-        red_ratio      = float(np.mean(red_mask))
-        deep_red_mask  = (r > 160) & (r > g + 50) & (r > b + 40)
-        deep_red_ratio = float(np.mean(deep_red_mask))
-        brightness     = (r + g + b) / 3.0
-        dark_ratio     = float(np.mean(brightness < 60))
-        color_score    = float(min(np.std(arr) / 80.0, 1.0))
+        if USE_CNN:
+            # ── CNN 경로: MobileNetV2 학습 모델 사용 ──
+            from tensorflow import keras as _keras
+            img = pil_image.convert("RGB").resize((224, 224))
+            arr = np.array(img, dtype=np.float32)
+            arr = _keras.applications.mobilenet_v2.preprocess_input(arr)
+            arr = np.expand_dims(arr, axis=0)           # (1, 224, 224, 3)
 
-        # ── 진단명 추가 피처 ──────────────────────
-        # 보라/파랑 계열 (멍·타박상)
-        purple_ratio = float(np.mean(
-            (b > 90) & (r > 70) & (b >= r * 0.85) & (g < b) & (brightness < 160)
-        ))
-        # 노랑/연두 계열 (감염·화농)
-        yellow_ratio = float(np.mean(
-            (r > 120) & (g > 100) & (b < 90) & (g > b * 1.5)
-        ))
-        # 창백·흰 영역 (화상·부종)
-        pale_ratio = float(np.mean(brightness > 210))
+            proba = cnn_model.predict(arr, verbose=0)[0]  # 클래스별 확률
 
-        # ── 진단명 다중 분류 (독립 임계값, 중복 허용) ──
-        # 심각도 순서 정의 (앞일수록 심각)
-        SEVERITY_ORDER = [
-            "출혈성 상처", "감염 의심", "화상",
-            "열상", "타박상", "찰과상", "부종·염좌 의심",
-        ]
+            # 상위 2개 진단명 추출 (확률 15% 이상)
+            detected = [
+                cnn_classes[i]
+                for i in np.argsort(proba)[::-1]
+                if proba[i] >= 0.15
+            ][:2]
+            if not detected:
+                detected = [cnn_classes[int(np.argmax(proba))]]
 
-        detected = []
-        if deep_red_ratio > 0.08:
-            detected.append("출혈성 상처")
-        if yellow_ratio > 0.04:
-            detected.append("감염 의심")
-        if pale_ratio > 0.30 and red_ratio > 0.03:
-            detected.append("화상")
-        if red_ratio > 0.05 and color_score > 0.45:
-            detected.append("열상")
-        if purple_ratio > 0.06 or (dark_ratio > 0.10 and red_ratio < 0.10):
-            detected.append("타박상")
-        if red_ratio > 0.12 and deep_red_ratio < 0.06:
-            detected.append("찰과상")
-        if not detected:
-            detected.append("부종·염좌 의심")
+            # 심각도 순 정렬
+            detected = sorted(
+                [d for d in detected if d in SEVERITY_ORDER],
+                key=lambda x: SEVERITY_ORDER.index(x),
+            ) or [cnn_classes[int(np.argmax(proba))]]
 
-        # 중복 제거 후 심각도 순 정렬
-        detected = sorted(set(detected), key=lambda x: SEVERITY_ORDER.index(x))
-        # 가이드는 가장 심각한 항목 기준
-        primary_type = detected[0]
+            primary_type = detected[0]
+            top_score    = float(proba[np.argmax(proba)])
 
-        score = float(np.clip(
-            red_ratio * 0.35 + deep_red_ratio * 0.30
-            + dark_ratio * 0.20 + color_score * 0.15,
-            0.0, 1.0,
-        ))
-        level = 2 if score >= 0.25 else (1 if score >= 0.10 else 0)
-        detail = {
-            "붉은 영역 비율": f"{red_ratio:.1%}",
-            "짙은 적색 비율": f"{deep_red_ratio:.1%}",
-            "암부(멍) 비율":  f"{dark_ratio:.1%}",
-            "색상 복잡도":    f"{color_score:.2f}",
-        }
+            # 응급도 레벨: primary_type 기준 매핑
+            level_map = {
+                "출혈성 상처": 2, "감염 의심": 1, "화상": 2,
+                "열상": 1, "타박상": 0, "찰과상": 0, "부종·염좌 의심": 0,
+            }
+            level = level_map.get(primary_type, 0)
+            score = top_score
+
+            detail = {
+                c: f"{proba[i]:.1%}"
+                for i, c in enumerate(cnn_classes)
+            }
+
+        else:
+            # ── HSV 폴백: 모델 파일 없을 때 ──────────
+            img = pil_image.convert("RGB").resize((256, 256))
+            arr = np.array(img, dtype=np.float32)
+            r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
+
+            red_mask       = (r > 140) & (r > g + 25) & (r > b + 25)
+            red_ratio      = float(np.mean(red_mask))
+            deep_red_mask  = (r > 160) & (r > g + 50) & (r > b + 40)
+            deep_red_ratio = float(np.mean(deep_red_mask))
+            brightness     = (r + g + b) / 3.0
+            dark_ratio     = float(np.mean(brightness < 60))
+            color_score    = float(min(np.std(arr) / 80.0, 1.0))
+            purple_ratio   = float(np.mean(
+                (b > 90) & (r > 70) & (b >= r * 0.85) & (g < b) & (brightness < 160)
+            ))
+            yellow_ratio   = float(np.mean(
+                (r > 120) & (g > 100) & (b < 90) & (g > b * 1.5)
+            ))
+            pale_ratio     = float(np.mean(brightness > 210))
+
+            detected = []
+            if deep_red_ratio > 0.08:  detected.append("출혈성 상처")
+            if yellow_ratio   > 0.04:  detected.append("감염 의심")
+            if pale_ratio > 0.30 and red_ratio > 0.03: detected.append("화상")
+            if red_ratio > 0.05 and color_score > 0.45: detected.append("열상")
+            if purple_ratio > 0.06 or (dark_ratio > 0.10 and red_ratio < 0.10):
+                detected.append("타박상")
+            if red_ratio > 0.12 and deep_red_ratio < 0.06: detected.append("찰과상")
+            if not detected: detected.append("부종·염좌 의심")
+
+            detected = sorted(set(detected), key=lambda x: SEVERITY_ORDER.index(x))
+            primary_type = detected[0]
+            score = float(np.clip(
+                red_ratio * 0.35 + deep_red_ratio * 0.30
+                + dark_ratio * 0.20 + color_score * 0.15, 0.0, 1.0,
+            ))
+            level = 2 if score >= 0.25 else (1 if score >= 0.10 else 0)
+            detail = {
+                "붉은 영역 비율": f"{red_ratio:.1%}",
+                "짙은 적색 비율": f"{deep_red_ratio:.1%}",
+                "암부(멍) 비율":  f"{dark_ratio:.1%}",
+                "색상 복잡도":    f"{color_score:.2f}",
+            }
+
         return level, score, detected, primary_type, detail
 
     LEVELS = {
