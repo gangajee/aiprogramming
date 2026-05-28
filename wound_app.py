@@ -381,9 +381,10 @@ def main():
         if type_detail or sev_detail:
             with st.expander("🔬 세부 분석 수치 보기"):
                 if type_detail:
-                    st.caption("진단명별 확률")
-                    cols = st.columns(len(type_detail))
-                    for col, (k, v) in zip(cols, type_detail.items()):
+                    st.caption("진단명별 확률 (상위 3)")
+                    top3 = sorted(type_detail.items(), key=lambda x: float(x[1].rstrip('%')), reverse=True)[:3]
+                    cols = st.columns(len(top3))
+                    for col, (k, v) in zip(cols, top3):
                         col.metric(k, v)
                 if sev_detail:
                     st.caption("심각도별 확률")
@@ -391,8 +392,8 @@ def main():
                     for col, (k, v) in zip(cols, sev_detail.items()):
                         col.metric(k, v)
 
-        # 병원 지도 (레벨 1·2에서만)
-        if level >= 1:
+        # 병원 지도
+        if True:
             import pandas as pd
             st.markdown("---")
             st.markdown(f"### {'🚨 가까운 응급실 찾기' if level == 2 else '🏥 가까운 병원 찾기'}")
@@ -469,10 +470,6 @@ def main():
                     } for h in hospitals]),
                     use_container_width=True, hide_index=True,
                 )
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔄 다른 사진 분석하기", use_container_width=True):
-            st.rerun()
 
     else:
         st.markdown("""
