@@ -225,7 +225,7 @@ def main():
     st.markdown("""
         <div class="header-card">
             <h1>🏥 AI 외상 응급도 판별 서비스</h1>
-            <p>외상 부위 사진을 업로드하면 AI가 내원 필요 여부를 판단해 드립니다</p>
+            <p>외상 부위 사진을 업로드하면 AI가 내원 필요 여부를 판단해 드립니다 · v2.1</p>
         </div>
     """, unsafe_allow_html=True)
 
