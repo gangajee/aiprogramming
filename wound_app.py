@@ -594,7 +594,7 @@ def main():
         hospitals = st.session_state.hospitals_raw
         if hospitals:
             lat, lon = CITIES[st.session_state.hospital_city]
-            m = folium.Map(location=[lat, lon], zoom_start=13, tiles="CartoDB positron")
+            m = folium.Map(location=[lat, lon], zoom_start=15, tiles="CartoDB positron")
             folium.Circle(location=[lat, lon], radius=5000,
                 color="#6366f1", weight=1.5, fill=True, fill_opacity=0.05).add_to(m)
             folium.CircleMarker(location=[lat, lon], radius=10, color="white", weight=3,
