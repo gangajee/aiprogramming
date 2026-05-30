@@ -43,7 +43,7 @@ MODEL_TO_DISPLAY = {
 }
 
 # 외상 신뢰도 최소 임계값 — 이 미만이면 "외상 아님" 처리
-WOUND_CONFIDENCE_THRESHOLD = 0.60
+WOUND_CONFIDENCE_THRESHOLD = 0.40
 
 # Model B 클래스 → 게이지 구간 중심값 (자가0-33 / 병원33-66 / 응급66-100)
 ZONE_PCT = {"자가처치": 16.5, "일반병원": 49.5, "응급실": 83.0}
@@ -116,7 +116,7 @@ BADGE_COLORS = {
 }
 
 
-def _has_skin(pil_image, min_ratio: float = 0.02) -> bool:
+def _has_skin(pil_image, min_ratio: float = 0.04) -> bool:
     """YCbCr 기반 피부색 검출 — 인체 피부 영역이 없으면 외상 사진이 아님."""
     import numpy as np
     arr = np.array(pil_image.convert("RGB").resize((128, 128)), dtype=np.float32)
@@ -125,7 +125,8 @@ def _has_skin(pil_image, min_ratio: float = 0.02) -> bool:
     Cb = 128 - 0.16874 * R - 0.33126 * G + 0.5   * B
     Cr = 128 + 0.5     * R - 0.41869 * G - 0.08131 * B
     # 표준 피부색 범위 (다양한 피부톤 포용, 사과·토마토 등 제외)
-    skin_mask = (Y > 60) & (Y < 220) & (Cb > 75) & (Cb < 135) & (Cr > 130) & (Cr < 180)
+    # Cr < 167 로 사과·토마토 황적색 픽셀 제외, min_ratio=0.04로 줄기만 있는 경우 제외
+    skin_mask = (Y > 60) & (Y < 220) & (Cb > 77) & (Cb < 127) & (Cr > 133) & (Cr < 167)
     return float(np.mean(skin_mask)) >= min_ratio
 
 
