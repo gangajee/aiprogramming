@@ -10,7 +10,6 @@ import sys
 import os
 import subprocess
 
-API_KEY        = os.environ.get("API_KEY", "")
 KAKAO_KEY      = os.environ.get("KAKAO_KEY", "")
 KAKAO_CATEGORY = "https://dapi.kakao.com/v2/local/search/category.json"
 
@@ -157,51 +156,32 @@ def _in_streamlit_ctx() -> bool:
         return False
 
 
-def fetch_nearby_hospitals(lat: float, lon: float, radius_m: int = 5000) -> tuple[list[dict], str, dict]:
-    """카카오 로컬 API — 반경 내 병원 검색 (HP8 카테고리).
-    Returns (hospitals, error_msg, debug_info).
-    """
+def fetch_nearby_hospitals(lat: float, lon: float, radius_m: int = 5000) -> tuple[list[dict], str]:
+    """카카오 로컬 API — 반경 내 병원 검색 (HP8). 최대 3페이지(45개) 거리순."""
     import requests
-    debug = {}
     if not KAKAO_KEY:
-        return [], "KAKAO_KEY가 설정되지 않았습니다.", debug
+        return [], "KAKAO_KEY가 설정되지 않았습니다."
 
     headers = {"Authorization": f"KakaoAK {KAKAO_KEY}"}
     hospitals = []
-
-    # 최대 3페이지(45개)까지 수집
     for page in range(1, 4):
         try:
-            params = {
-                "category_group_code": "HP8",
-                "x": lon, "y": lat,
-                "radius": radius_m,
-                "sort": "distance",
-                "size": 15,
-                "page": page,
-            }
-            resp = requests.get(KAKAO_CATEGORY, headers=headers, params=params, timeout=8)
-            debug[f"status_p{page}"] = resp.status_code
+            resp = requests.get(KAKAO_CATEGORY, headers=headers, params={
+                "category_group_code": "HP8", "x": lon, "y": lat,
+                "radius": radius_m, "sort": "distance", "size": 15, "page": page,
+            }, timeout=8)
             data = resp.json()
-
             if resp.status_code != 200:
-                debug["error"] = data.get("message", "알 수 없는 오류")
-                break
-
+                return [], data.get("message", "카카오 API 오류")
             docs = data.get("documents", [])
             for h in docs:
-                # distance 는 미터 단위 → km 변환
                 h["distance_km"] = round(int(h.get("distance", 0)) / 1000, 2)
             hospitals.extend(docs)
-
             if data.get("meta", {}).get("is_end", True):
                 break
         except Exception as e:
-            debug[f"error_p{page}"] = str(e)
-            break
-
-    debug["total"] = len(hospitals)
-    return hospitals, "", debug
+            return [], f"요청 실패: {e}"
+    return hospitals, ""
 
 
 def main():
@@ -211,12 +191,7 @@ def main():
     import folium
     from streamlit_folium import st_folium
 
-    global API_KEY, KAKAO_KEY
-    if not API_KEY:
-        try:
-            API_KEY = st.secrets["API_KEY"]
-        except Exception:
-            pass
+    global KAKAO_KEY
     if not KAKAO_KEY:
         try:
             KAKAO_KEY = st.secrets["KAKAO_KEY"]
@@ -591,98 +566,77 @@ def main():
                         col.metric(k, v)
 
         # 병원 지도
-        if True:
-            import pandas as pd
-            title = "🚨 가까운 응급실 찾기" if level == 2 else "🏥 가까운 병원 찾기"
-            st.markdown(
-                f'<div class="hospital-header"><h3>{title}</h3></div>',
-                unsafe_allow_html=True,
-            )
+        import pandas as pd
+        title = "🚨 가까운 응급실 찾기" if level == 2 else "🏥 가까운 병원 찾기"
+        st.markdown(f'<div class="hospital-header"><h3>{title}</h3></div>', unsafe_allow_html=True)
 
-            for key, default in [("hospitals_raw", []), ("hospital_city", "서울"), ("hospital_radius", 5)]:
-                if key not in st.session_state:
-                    st.session_state[key] = default
+        for k, v in [("hospitals_raw", []), ("hospital_city", "서울")]:
+            if k not in st.session_state:
+                st.session_state[k] = v
 
-            city       = st.selectbox("현재 위치 (도시 선택)", options=list(CITIES.keys()))
-            radius_km  = st.slider("검색 반경 (km)", min_value=1, max_value=15, value=5)
-            search_btn = st.button("병원 검색", type="primary", use_container_width=True)
+        city       = st.selectbox("현재 위치 (도시 선택)", options=list(CITIES.keys()))
+        search_btn = st.button("병원 검색", type="primary", use_container_width=True)
 
-            if search_btn:
-                lat, lon = CITIES[city]
-                with st.spinner("주변 병원을 검색 중입니다..."):
-                    raw, err, dbg = fetch_nearby_hospitals(lat, lon, radius_m=radius_km * 1000)
-                    st.session_state.hospitals_raw   = raw
-                    st.session_state.hospital_error  = err
-                    st.session_state.hospital_debug  = dbg
-                    st.session_state.hospital_city   = city
-                    st.session_state.hospital_radius = radius_km
+        if search_btn:
+            lat, lon = CITIES[city]
+            with st.spinner("주변 병원을 검색 중입니다..."):
+                raw, err = fetch_nearby_hospitals(lat, lon)
+                st.session_state.hospitals_raw  = raw
+                st.session_state.hospital_error = err
+                st.session_state.hospital_city  = city
 
-            if st.session_state.get("hospital_error"):
-                st.error(f"병원 검색 오류: {st.session_state.hospital_error}")
+        if st.session_state.get("hospital_error"):
+            st.error(f"병원 검색 오류: {st.session_state.hospital_error}")
 
-            hospitals = st.session_state.hospitals_raw  # 이미 거리순 정렬됨
+        if search_btn and not st.session_state.hospitals_raw and not st.session_state.get("hospital_error"):
+            st.warning("검색 결과가 없습니다. 다른 도시를 선택해 보세요.")
 
-            if search_btn and not hospitals and not st.session_state.get("hospital_error"):
-                st.warning("검색 결과가 없습니다. 반경을 늘리거나 다른 도시를 선택해 보세요.")
-                dbg = st.session_state.get("hospital_debug", {})
-                if dbg:
-                    with st.expander("🔍 API 진단 정보"):
-                        st.json(dbg)
+        hospitals = st.session_state.hospitals_raw
+        if hospitals:
+            lat, lon = CITIES[st.session_state.hospital_city]
+            m = folium.Map(location=[lat, lon], zoom_start=13, tiles="CartoDB positron")
+            folium.Circle(location=[lat, lon], radius=5000,
+                color="#6366f1", weight=1.5, fill=True, fill_opacity=0.05).add_to(m)
+            folium.CircleMarker(location=[lat, lon], radius=10, color="white", weight=3,
+                fill=True, fill_color="#1e40af", fill_opacity=1.0, tooltip="📍 현재 위치").add_to(m)
 
-            if hospitals:
-                lat, lon = CITIES[st.session_state.hospital_city]
-                r_km = st.session_state.hospital_radius
-                m = folium.Map(location=[lat, lon], zoom_start=13, tiles="CartoDB positron")
+            pin_color  = "#dc2626" if level == 2 else "#d97706"
+            pin_border = "#7f1d1d" if level == 2 else "#713f12"
 
-                # 검색 반경 원
-                folium.Circle(
-                    location=[lat, lon], radius=r_km * 1000,
-                    color="#6366f1", weight=1.5, fill=True, fill_opacity=0.05,
-                ).add_to(m)
-                folium.CircleMarker(
-                    location=[lat, lon], radius=10, color="white", weight=3,
-                    fill=True, fill_color="#1e40af", fill_opacity=1.0, tooltip="📍 현재 위치",
-                ).add_to(m)
-
-                pin_color  = "#dc2626" if level == 2 else "#d97706"
-                pin_border = "#7f1d1d" if level == 2 else "#713f12"
-
-                for h in hospitals:
-                    h_lat = h.get("y")   # 카카오: y=위도, x=경도
-                    h_lon = h.get("x")
-                    if not h_lat or not h_lon:
-                        continue
-                    name = h.get("place_name", "병원")
-                    dist = h.get("distance_km", "-")
-                    popup_html = (
-                        f"<div style='font-size:13px;line-height:1.6'>"
-                        f"<b style='font-size:14px'>{name}</b><br>"
-                        f"🏷 {h.get('category_name','-').split(' > ')[-1]}<br>"
-                        f"📍 {h.get('road_address_name') or h.get('address_name','-')}<br>"
-                        f"☎ {h.get('phone','-') or '-'}<br>"
-                        f"📏 {dist}km</div>"
-                    )
-                    folium.CircleMarker(
-                        location=[float(h_lat), float(h_lon)],
-                        radius=9, color=pin_border, weight=2,
-                        fill=True, fill_color=pin_color, fill_opacity=0.85,
-                        tooltip=f"🏥 {name}  ({dist}km)",
-                        popup=folium.Popup(popup_html, max_width=260),
-                    ).add_to(m)
-
-                st_folium(m, width=700, height=450, returned_objects=[])
-
-                st.markdown(f"**반경 {r_km}km 내 병원 ({len(hospitals)}개) — 거리순**")
-                st.dataframe(
-                    pd.DataFrame([{
-                        "기관명": h.get("place_name", "-"),
-                        "분류": h.get("category_name", "-").split(" > ")[-1],
-                        "거리(km)": h.get("distance_km", "-"),
-                        "전화번호": h.get("phone", "-") or "-",
-                        "주소": h.get("road_address_name") or h.get("address_name", "-"),
-                    } for h in hospitals]),
-                    use_container_width=True, hide_index=True,
+            for h in hospitals:
+                h_lat, h_lon = h.get("y"), h.get("x")
+                if not h_lat or not h_lon:
+                    continue
+                name = h.get("place_name", "병원")
+                dist = h.get("distance_km", "-")
+                popup_html = (
+                    f"<div style='font-size:13px;line-height:1.6'>"
+                    f"<b style='font-size:14px'>{name}</b><br>"
+                    f"🏷 {h.get('category_name','-').split(' > ')[-1]}<br>"
+                    f"📍 {h.get('road_address_name') or h.get('address_name','-')}<br>"
+                    f"☎ {h.get('phone') or '-'}<br>"
+                    f"📏 {dist}km</div>"
                 )
+                folium.CircleMarker(
+                    location=[float(h_lat), float(h_lon)],
+                    radius=9, color=pin_border, weight=2,
+                    fill=True, fill_color=pin_color, fill_opacity=0.85,
+                    tooltip=f"🏥 {name} ({dist}km)",
+                    popup=folium.Popup(popup_html, max_width=260),
+                ).add_to(m)
+
+            st_folium(m, width=700, height=450, returned_objects=[])
+            st.markdown(f"**반경 5km 내 병원 ({len(hospitals)}개) — 거리순**")
+            st.dataframe(
+                pd.DataFrame([{
+                    "기관명": h.get("place_name", "-"),
+                    "분류": h.get("category_name", "-").split(" > ")[-1],
+                    "거리(km)": h.get("distance_km", "-"),
+                    "전화번호": h.get("phone") or "-",
+                    "주소": h.get("road_address_name") or h.get("address_name", "-"),
+                } for h in hospitals]),
+                use_container_width=True, hide_index=True,
+            )
 
     else:
         st.markdown("""

@@ -154,27 +154,29 @@ tflite_model = converter.convert()
 
 ## 외부 API
 
-### 공공데이터포털 — 응급의료기관 목록 조회
+### 카카오 로컬 API — 주변 병원 검색
 
-- **제공처**: 보건복지부 / 국립중앙의료원
-- **서비스**: `ErmctInfoInqireService/getEgytLcinfoInqire`
-- **엔드포인트**: `https://apis.data.go.kr/B552657/ErmctInfoInqireService`
-- **인증**: 공공데이터포털 발급 API 키 (`serviceKey`)
+- **제공처**: 카카오 (Kakao Developers)
+- **서비스**: `v2/local/search/category.json`
+- **엔드포인트**: `https://dapi.kakao.com/v2/local/search/category.json`
+- **인증**: 카카오 REST API 키 (`KakaoAK {KEY}` Authorization 헤더)
 - **주요 파라미터**:
 
-| 파라미터 | 설명 |
-|----------|------|
-| `WGS84_LAT` | 기준 위도 |
-| `WGS84_LON` | 기준 경도 |
-| `numOfRows` | 최대 반환 건수 |
+| 파라미터 | 값 | 설명 |
+|----------|----|------|
+| `category_group_code` | `HP8` | 병원 카테고리 |
+| `x` / `y` | 경도 / 위도 | 기준 좌표 |
+| `radius` | 5000 | 반경(m), 고정 5km |
+| `sort` | `distance` | 거리순 정렬 |
+| `size` | 15 | 페이지당 건수 (최대 3페이지 = 45개) |
 
-- **응답 필드**: `dutyName`(기관명), `wgs84Lat/Lon`(좌표), `dutyAddr`(주소), `dutyTel1`(전화)
-- **거리 계산**: API 응답에 거리 필드가 없어 Haversine 공식으로 직접 계산 후 필터링
+- **응답 필드**: `place_name`(기관명), `x/y`(좌표), `road_address_name`(주소), `phone`(전화), `distance`(m)
+- **거리 변환**: API 응답 `distance`(m) → `distance_km`(km) 직접 변환
 
 ### Folium + streamlit-folium
 
-- OpenStreetMap 기반 지도 렌더링
-- 현재 위치(파란 핀) + 반경 원 + 병원 핀(응급실은 빨간색, 일반병원은 주황색) 표시
+- CartoDB Positron 기반 지도 렌더링
+- 현재 위치(파란 핀) + 반경 5km 원 + 병원 핀(응급실은 빨간색, 일반병원은 주황색) 표시
 
 ---
 
@@ -201,15 +203,17 @@ TensorFlow 전체를 제거하고 TFLite 인터프리터만 포함된 `ai-edge-l
 2. `requirements.txt`에서 `tensorflow` 제거 → `ai-edge-litert>=2.1.0` 추가
 3. `wound_app.py`의 모델 로딩 코드를 `ai_edge_litert.Interpreter`로 교체
 4. GitHub에 push → Streamlit Cloud 자동 재배포
-5. Streamlit Cloud Secrets에 `API_KEY` 등록
+5. Streamlit Cloud Secrets에 `KAKAO_KEY` 등록
 
 ### Secrets 설정
 
 Streamlit Cloud 대시보드 → 앱 Settings → Secrets 탭:
 
 ```toml
-API_KEY = "공공데이터포털_발급_키"
+KAKAO_KEY = "카카오_REST_API_키"
 ```
+
+> **카카오 사전 준비**: [developers.kakao.com](https://developers.kakao.com) → 내 애플리케이션 → 앱 선택 → 제품 설정 → **카카오맵** 활성화 필요
 
 ---
 
