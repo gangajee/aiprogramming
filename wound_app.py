@@ -156,7 +156,7 @@ def _in_streamlit_ctx() -> bool:
         return False
 
 
-def fetch_nearby_hospitals(lat: float, lon: float, rows: int = 50) -> tuple[list[dict], str]:
+def fetch_nearby_hospitals(lat: float, lon: float, rows: int = 100) -> tuple[list[dict], str]:
     """Returns (hospitals, error_msg). error_msg is '' on success."""
     import requests, math
     if not API_KEY:
@@ -584,18 +584,20 @@ def main():
                 unsafe_allow_html=True,
             )
 
-            for key, default in [("hospitals_raw", []), ("hospital_city", "서울"), ("hospital_radius", 5)]:
+            for key, default in [("hospitals_raw", []), ("hospital_city", "서울"), ("hospital_radius", 10)]:
                 if key not in st.session_state:
                     st.session_state[key] = default
 
             city      = st.selectbox("현재 위치 (도시 선택)", options=list(CITIES.keys()))
-            radius_km = st.slider("검색 반경 (km)", min_value=1, max_value=20, value=5)
+            radius_km = st.slider("검색 반경 (km)", min_value=1, max_value=30, value=10)
             search_btn = st.button("병원 검색", type="primary", use_container_width=True)
 
             if search_btn:
                 lat, lon = CITIES[city]
+                # 반경이 클수록 더 많은 결과 요청 (최대 100)
+                fetch_rows = min(100, max(50, radius_km * 8))
                 with st.spinner("주변 응급의료기관을 검색 중입니다..."):
-                    raw, err = fetch_nearby_hospitals(lat, lon)
+                    raw, err = fetch_nearby_hospitals(lat, lon, rows=fetch_rows)
                     st.session_state.hospitals_raw   = raw
                     st.session_state.hospital_error  = err
                     st.session_state.hospital_city   = city
