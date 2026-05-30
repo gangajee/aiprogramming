@@ -43,7 +43,7 @@ MODEL_TO_DISPLAY = {
 }
 
 # 외상 신뢰도 최소 임계값 — 이 미만이면 "외상 아님" 처리
-WOUND_CONFIDENCE_THRESHOLD = 0.38
+WOUND_CONFIDENCE_THRESHOLD = 0.60
 
 # Model B 클래스 → 게이지 구간 중심값 (자가0-33 / 병원33-66 / 응급66-100)
 ZONE_PCT = {"자가처치": 16.5, "일반병원": 49.5, "응급실": 83.0}
@@ -114,6 +114,19 @@ BADGE_COLORS = {
     "부종·염좌 의심": ("#dbeafe", "#1e3a8a"),
     "감염 의심":      ("#d1fae5", "#064e3b"),
 }
+
+
+def _has_skin(pil_image, min_ratio: float = 0.02) -> bool:
+    """YCbCr 기반 피부색 검출 — 인체 피부 영역이 없으면 외상 사진이 아님."""
+    import numpy as np
+    arr = np.array(pil_image.convert("RGB").resize((128, 128)), dtype=np.float32)
+    R, G, B = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
+    Y  =  0.299 * R + 0.587 * G + 0.114 * B
+    Cb = 128 - 0.16874 * R - 0.33126 * G + 0.5   * B
+    Cr = 128 + 0.5     * R - 0.41869 * G - 0.08131 * B
+    # 표준 피부색 범위 (다양한 피부톤 포용, 사과·토마토 등 제외)
+    skin_mask = (Y > 60) & (Y < 220) & (Cb > 75) & (Cb < 135) & (Cr > 130) & (Cr < 180)
+    return float(np.mean(skin_mask)) >= min_ratio
 
 
 def _in_streamlit_ctx() -> bool:
@@ -277,6 +290,10 @@ def main():
     def analyze_wound(pil_image: Image.Image):
         """Returns (level, bar_pct, detected, primary_type, type_detail, sev_detail)"""
 
+        # 피부색이 감지되지 않으면 외상 사진이 아님
+        if not _has_skin(pil_image):
+            return -1, 0.0, [], None, {}, {}
+
         if USE_TYPE or USE_SEV:
             arr = preprocess(pil_image)
 
@@ -382,6 +399,12 @@ def main():
     if uploaded is not None:
         image = Image.open(uploaded)
         st.image(image, caption="업로드된 외상 사진", use_container_width=True)
+
+        # 어떤 모드로 동작 중인지 표시
+        if USE_TYPE and USE_SEV:
+            st.success("🤖 AI 모델 사용 중", icon=None)
+        else:
+            st.error(f"⚠️ AI 모델 미로드 — 색상 분석 모드 (신뢰도 낮음) | 오류: {_load_err}")
 
         with st.spinner("AI가 사진을 분석하고 있습니다..."):
             level, bar_pct, detected, primary_type, type_detail, sev_detail = analyze_wound(image)
