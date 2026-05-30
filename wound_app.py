@@ -156,11 +156,12 @@ def _in_streamlit_ctx() -> bool:
         return False
 
 
-def fetch_nearby_hospitals(lat: float, lon: float, rows: int = 100) -> tuple[list[dict], str]:
-    """Returns (hospitals, error_msg). error_msg is '' on success."""
+def fetch_nearby_hospitals(lat: float, lon: float, rows: int = 100) -> tuple[list[dict], str, dict]:
+    """Returns (hospitals, error_msg, debug_info)."""
     import requests, math
+    debug = {}
     if not API_KEY:
-        return [], "API_KEY가 설정되지 않았습니다."
+        return [], "API_KEY가 설정되지 않았습니다.", debug
 
     params = {
         "serviceKey": API_KEY, "WGS84_LAT": lat, "WGS84_LON": lon,
@@ -168,15 +169,29 @@ def fetch_nearby_hospitals(lat: float, lon: float, rows: int = 100) -> tuple[lis
     }
     try:
         resp = requests.get(f"{API_BASE}/getEgytLcinfoInqire", params=params, timeout=8)
+        debug["status_code"] = resp.status_code
         data = resp.json()
         header = data.get("response", {}).get("header", {})
+        debug["resultCode"] = header.get("resultCode")
+        debug["resultMsg"]  = header.get("resultMsg")
+        debug["totalCount"] = data.get("response", {}).get("body", {}).get("totalCount", "?")
+
         if header.get("resultCode") != "00":
-            return [], f"API 오류 ({header.get('resultCode')}): {header.get('resultMsg', '알 수 없는 오류')}"
+            return [], f"API 오류 ({header.get('resultCode')}): {header.get('resultMsg', '알 수 없는 오류')}", debug
+
         items = data["response"]["body"]["items"]
         if not items:
-            return [], ""
+            return [], "", debug
+
         item = items["item"]
         hospitals = item if isinstance(item, list) else [item]
+        debug["raw_count"] = len(hospitals)
+
+        # 첫 번째 항목의 키 목록 확인용
+        if hospitals:
+            debug["sample_keys"] = list(hospitals[0].keys())
+            debug["sample_lat"]  = hospitals[0].get("wgs84Lat")
+            debug["sample_lon"]  = hospitals[0].get("wgs84Lon")
 
         def haversine(lat1, lon1, lat2, lon2):
             R = 6371.0
@@ -189,9 +204,12 @@ def fetch_nearby_hospitals(lat: float, lon: float, rows: int = 100) -> tuple[lis
             h_lat = h.get("wgs84Lat") or h.get("latitude")
             h_lon = h.get("wgs84Lon") or h.get("longitude")
             h["distance"] = round(haversine(lat, lon, float(h_lat), float(h_lon)), 2) if h_lat and h_lon else 9999
-        return hospitals, ""
+
+        debug["no_coord_count"] = sum(1 for h in hospitals if h.get("distance") == 9999)
+        return hospitals, "", debug
     except Exception as e:
-        return [], f"요청 실패: {e}"
+        debug["exception"] = str(e)
+        return [], f"요청 실패: {e}", debug
 
 
 def main():
@@ -594,12 +612,12 @@ def main():
 
             if search_btn:
                 lat, lon = CITIES[city]
-                # 반경이 클수록 더 많은 결과 요청 (최대 100)
                 fetch_rows = min(100, max(50, radius_km * 8))
                 with st.spinner("주변 응급의료기관을 검색 중입니다..."):
-                    raw, err = fetch_nearby_hospitals(lat, lon, rows=fetch_rows)
+                    raw, err, dbg = fetch_nearby_hospitals(lat, lon, rows=fetch_rows)
                     st.session_state.hospitals_raw   = raw
                     st.session_state.hospital_error  = err
+                    st.session_state.hospital_debug  = dbg
                     st.session_state.hospital_city   = city
                     st.session_state.hospital_radius = radius_km
 
@@ -613,6 +631,10 @@ def main():
 
             if search_btn and not hospitals and not st.session_state.get("hospital_error"):
                 st.warning("해당 반경 내 검색 결과가 없습니다. 반경을 늘려보세요.")
+                dbg = st.session_state.get("hospital_debug", {})
+                if dbg:
+                    with st.expander("🔍 API 진단 정보"):
+                        st.json(dbg)
 
             if hospitals:
                 lat, lon = CITIES[st.session_state.hospital_city]
