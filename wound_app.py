@@ -219,27 +219,48 @@ def main():
     @st.cache_resource
     def load_models():
         import json
-        from ai_edge_litert.interpreter import Interpreter
+        load_err = ""
+        try:
+            from ai_edge_litert.interpreter import Interpreter
+        except Exception as e:
+            return None, None, False, None, None, False, f"ai_edge_litert import 실패: {e}"
 
+        cwd = os.getcwd()
         type_interp, type_classes, use_type = None, None, False
-        if os.path.exists("wound_model.tflite") and os.path.exists("class_names.json"):
-            type_interp = Interpreter("wound_model.tflite")
-            type_interp.allocate_tensors()
-            with open("class_names.json", encoding="utf-8") as f:
-                type_classes = json.load(f)
-            use_type = True
+        a_tflite = os.path.join(cwd, "wound_model.tflite")
+        a_json   = os.path.join(cwd, "class_names.json")
+        if os.path.exists(a_tflite) and os.path.exists(a_json):
+            try:
+                type_interp = Interpreter(a_tflite)
+                type_interp.allocate_tensors()
+                with open(a_json, encoding="utf-8") as f:
+                    type_classes = json.load(f)
+                use_type = True
+            except Exception as e:
+                load_err += f"Model A 로드 실패: {e} | "
+        else:
+            load_err += f"Model A 파일 없음 (cwd={cwd}) | "
 
         sev_interp, sev_classes, use_sev = None, None, False
-        if os.path.exists("severity_model.tflite") and os.path.exists("severity_class_names.json"):
-            sev_interp = Interpreter("severity_model.tflite")
-            sev_interp.allocate_tensors()
-            with open("severity_class_names.json", encoding="utf-8") as f:
-                sev_classes = json.load(f)
-            use_sev = True
+        b_tflite = os.path.join(cwd, "severity_model.tflite")
+        b_json   = os.path.join(cwd, "severity_class_names.json")
+        if os.path.exists(b_tflite) and os.path.exists(b_json):
+            try:
+                sev_interp = Interpreter(b_tflite)
+                sev_interp.allocate_tensors()
+                with open(b_json, encoding="utf-8") as f:
+                    sev_classes = json.load(f)
+                use_sev = True
+            except Exception as e:
+                load_err += f"Model B 로드 실패: {e}"
+        else:
+            load_err += f"Model B 파일 없음"
 
-        return type_interp, type_classes, use_type, sev_interp, sev_classes, use_sev
+        return type_interp, type_classes, use_type, sev_interp, sev_classes, use_sev, load_err
 
-    type_model, type_classes, USE_TYPE, sev_model, sev_classes, USE_SEV = load_models()
+    type_model, type_classes, USE_TYPE, sev_model, sev_classes, USE_SEV, _load_err = load_models()
+    if _load_err:
+        st.warning(f"⚠️ 모델 로드 오류: {_load_err}")
 
     def _tflite_run(interp, arr):
         inp = interp.get_input_details()[0]['index']
@@ -297,7 +318,7 @@ def main():
                 sev_detail = {}
 
         else:
-            # HSV 폴백: 모델 없을 때
+            # HSV 폴백: 모델 없을 때 (색상 분석)
             img = pil_image.convert("RGB").resize((256, 256))
             arr = np.array(img, dtype=np.float32)
             r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
@@ -311,20 +332,25 @@ def main():
             yellow_ratio   = float(np.mean((r > 120) & (g > 100) & (b < 90) & (g > b * 1.5)))
             pale_ratio     = float(np.mean(brightness > 210))
 
-            detected = []
-            if deep_red_ratio > 0.08:                                   detected.append("출혈성 상처")
-            if yellow_ratio   > 0.04:                                   detected.append("감염 의심")
-            if pale_ratio > 0.30 and red_ratio > 0.03:                  detected.append("화상")
-            if red_ratio > 0.05 and color_score > 0.45:                 detected.append("열상")
-            if purple_ratio > 0.06 or (dark_ratio > 0.10 and red_ratio < 0.10): detected.append("타박상")
-            if red_ratio > 0.12 and deep_red_ratio < 0.06:              detected.append("찰과상")
-            if not detected:                                             detected.append("부종·염좌 의심")
-
-            detected = sorted(set(detected), key=lambda x: SEVERITY_ORDER.index(x))
-            primary_type = detected[0]
             score = float(np.clip(
                 red_ratio * 0.35 + deep_red_ratio * 0.30 + dark_ratio * 0.20 + color_score * 0.15, 0.0, 1.0
             ))
+
+            # 색상 점수가 낮으면 외상 아님으로 판단
+            if score < 0.12:
+                return -1, 0.0, [], None, {}, {}
+
+            detected = []
+            if deep_red_ratio > 0.08:                                        detected.append("출혈성 상처")
+            if yellow_ratio   > 0.04:                                        detected.append("감염 의심")
+            if pale_ratio > 0.30 and red_ratio > 0.03:                       detected.append("화상")
+            if red_ratio > 0.05 and color_score > 0.45:                      detected.append("열상")
+            if purple_ratio > 0.06 or (dark_ratio > 0.10 and red_ratio < 0.10): detected.append("타박상")
+            if red_ratio > 0.12 and deep_red_ratio < 0.06:                   detected.append("찰과상")
+            if not detected:                                                  detected.append("부종·염좌 의심")
+
+            detected = sorted(set(detected), key=lambda x: SEVERITY_ORDER.index(x))
+            primary_type = detected[0]
             level = 2 if score >= 0.25 else (1 if score >= 0.10 else 0)
             if score < 0.10:
                 bar_pct = round((score / 0.10) * 33, 1)
