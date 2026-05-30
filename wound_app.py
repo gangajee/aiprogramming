@@ -229,7 +229,6 @@ def main():
         </div>
     """, unsafe_allow_html=True)
 
-    @st.cache_resource
     def load_models():
         import json
         load_err = ""
