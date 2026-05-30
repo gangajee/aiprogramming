@@ -196,37 +196,108 @@ def main():
 
     st.markdown("""
         <style>
-        [data-testid="stAppViewContainer"] { background-color: #f8fafc; }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+        * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
+
+        [data-testid="stAppViewContainer"] {
+            background: #f0f2f6;
+        }
+        [data-testid="stHeader"] { background: transparent !important; }
+        .block-container { padding-top: 1.8rem !important; }
+
+        /* ── 헤더 ── */
         .header-card {
-            background: linear-gradient(135deg, #1e40af 0%, #0f766e 100%);
-            border-radius: 16px; padding: 32px 28px 24px;
-            color: white; margin-bottom: 24px; text-align: center;
+            background: linear-gradient(135deg, #0f2942 0%, #1a4a7a 55%, #1e6091 100%);
+            border-radius: 22px;
+            padding: 38px 32px 30px;
+            color: white;
+            margin-bottom: 24px;
+            text-align: center;
+            box-shadow: 0 12px 40px rgba(15,41,66,0.28), 0 2px 8px rgba(0,0,0,0.12);
+            position: relative; overflow: hidden;
         }
-        .header-card h1 { font-size: 1.8rem; font-weight: 700; margin: 0 0 6px; }
-        .header-card p  { font-size: 0.95rem; opacity: 0.85; margin: 0; }
-        .result-card { border-radius: 14px; padding: 28px 24px; margin-top: 20px; text-align: center; }
-        .result-card h2 { font-size: 1.5rem; margin: 8px 0 4px; }
-        .result-card p  { font-size: 0.95rem; margin: 0; }
-        .level-0 { background:#dcfce7; border:2px solid #16a34a; color:#14532d; }
-        .level-1 { background:#fef9c3; border:2px solid #ca8a04; color:#713f12; }
-        .level-2 { background:#fee2e2; border:2px solid #dc2626; color:#7f1d1d; }
+        .header-card::after {
+            content: '';
+            position: absolute; top: -60px; right: -60px;
+            width: 220px; height: 220px;
+            background: rgba(255,255,255,0.06);
+            border-radius: 50%; pointer-events: none;
+        }
+        .header-card h1 {
+            font-size: 1.7rem; font-weight: 800;
+            margin: 0 0 8px; letter-spacing: -0.4px;
+        }
+        .header-card p { font-size: 0.88rem; opacity: 0.7; margin: 0; }
+
+        /* ── 결과 카드 ── */
+        .result-card {
+            border-radius: 20px; padding: 32px 28px 28px;
+            margin-top: 18px; text-align: center;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.07), 0 1px 4px rgba(0,0,0,0.05);
+        }
+        .result-card .icon { font-size: 2.6rem; line-height: 1; }
+        .result-card h2 { font-size: 1.55rem; font-weight: 700; margin: 12px 0 6px; }
+        .result-card .sub { font-size: 0.83rem; opacity: 0.65; margin-top: 10px; }
+
+        .level-0 { background: linear-gradient(145deg,#f0fdf6,#dcfce7); color:#14532d; }
+        .level-1 { background: linear-gradient(145deg,#fffceb,#fef3c7); color:#713f12; }
+        .level-2 { background: linear-gradient(145deg,#fff5f5,#fee2e2); color:#7f1d1d; }
+
+        /* ── 가이드 박스 ── */
         .guide-box {
-            background: white; border-radius: 12px; padding: 20px 24px;
-            margin-top: 16px; border-left: 4px solid #6366f1;
-            font-size: 0.93rem; line-height: 1.7;
+            background: white; border-radius: 18px;
+            padding: 22px 26px; margin-top: 14px;
+            border-left: 5px solid #6366f1;
+            box-shadow: 0 2px 16px rgba(0,0,0,0.06);
+            font-size: 0.92rem; line-height: 1.85; color: #1e293b;
         }
+        .guide-box strong { font-size: 0.95rem; color: #312e81; }
+
+        /* ── 외상 없음 카드 ── */
+        .no-wound-card {
+            background: white; border-radius: 20px;
+            padding: 36px 28px; margin-top: 18px; text-align: center;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.07);
+            border-top: 5px solid #f59e0b;
+        }
+        .no-wound-card h2 { color: #92400e; font-size: 1.4rem; font-weight: 700; margin: 12px 0 8px; }
+        .no-wound-card p  { color: #78350f; font-size: 0.9rem; line-height: 1.7; margin: 0; }
+
+        /* ── 병원 섹션 ── */
+        .hospital-header {
+            background: white; border-radius: 18px;
+            padding: 20px 24px 16px; margin-top: 20px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+        }
+        .hospital-header h3 { font-size: 1.1rem; font-weight: 700; color: #0f172a; margin: 0; }
+
+        /* ── 면책 ── */
         .disclaimer {
-            background: #f1f5f9; border-radius: 10px; padding: 14px 18px;
-            font-size: 0.82rem; color: #64748b; margin-top: 28px;
-            line-height: 1.6; text-align: center;
+            background: rgba(255,255,255,0.6);
+            border: 1px solid #e2e8f0;
+            border-radius: 14px; padding: 16px 20px;
+            font-size: 0.8rem; color: #94a3b8;
+            margin-top: 32px; line-height: 1.6; text-align: center;
+        }
+
+        /* ── 업로드 영역 커스텀 ── */
+        [data-testid="stFileUploader"] > div:first-child {
+            border: 2px dashed #cbd5e1 !important;
+            border-radius: 16px !important;
+            background: white !important;
+            transition: border-color .2s;
+        }
+        [data-testid="stFileUploader"] > div:first-child:hover {
+            border-color: #6366f1 !important;
         }
         </style>
     """, unsafe_allow_html=True)
 
     st.markdown("""
         <div class="header-card">
-            <h1>🏥 AI 외상 응급도 판별 서비스</h1>
-            <p>외상 부위 사진을 업로드하면 AI가 내원 필요 여부를 판단해 드립니다 · v2.1</p>
+            <h1>🏥 AI 외상 응급도 판별</h1>
+            <p>외상 사진을 업로드하면 AI가 상처 종류와 내원 필요 여부를 판단해 드립니다</p>
         </div>
     """, unsafe_allow_html=True)
 
@@ -402,7 +473,12 @@ def main():
 
         # 어떤 모드로 동작 중인지 표시
         if USE_TYPE and USE_SEV:
-            st.success("🤖 AI 모델 사용 중", icon=None)
+            st.markdown(
+                '<p style="text-align:center;margin:6px 0 10px;">'
+                '<span style="background:#dcfce7;color:#15803d;font-size:0.82rem;font-weight:600;'
+                'padding:4px 14px;border-radius:20px;border:1px solid #86efac;">🤖 AI 모델 분석 중</span></p>',
+                unsafe_allow_html=True,
+            )
         else:
             st.error(f"⚠️ AI 모델 미로드 — 색상 분석 모드 (신뢰도 낮음) | 오류: {_load_err}")
 
@@ -411,17 +487,12 @@ def main():
 
         if level == -1:
             st.markdown("""
-                <div style="background:#fef2f2;border:2px solid #dc2626;border-radius:14px;
-                            padding:28px 24px;margin-top:20px;text-align:center;">
-                    <div style="font-size:2.4rem;">⚠️</div>
-                    <h2 style="color:#7f1d1d;margin:10px 0 6px;">외상이 감지되지 않았습니다</h2>
-                    <p style="color:#991b1b;font-size:0.95rem;margin:0 0 12px;">
-                        업로드한 사진에서 상처나 외상을 찾을 수 없습니다.
-                    </p>
-                    <p style="color:#7f1d1d;font-size:0.88rem;margin:0;">
-                        📸 <strong>외상 부위를 가까이 촬영한 사진</strong>을 다시 업로드해 주세요.<br>
-                        찰과상 · 열상 · 타박상 · 화상 · 출혈 부위 등의 사진에 최적화되어 있습니다.
-                    </p>
+                <div class="no-wound-card">
+                    <div style="font-size:2.8rem;">🔍</div>
+                    <h2>외상이 감지되지 않았습니다</h2>
+                    <p>업로드한 사진에서 상처나 외상을 찾을 수 없습니다.<br>
+                    <strong>외상 부위를 가까이 촬영한 사진</strong>을 다시 업로드해 주세요.<br>
+                    찰과상 · 열상 · 타박상 · 화상 · 출혈 부위 등의 사진에 최적화되어 있습니다.</p>
                 </div>
             """, unsafe_allow_html=True)
             st.stop()
@@ -491,8 +562,11 @@ def main():
         # 병원 지도
         if True:
             import pandas as pd
-            st.markdown("---")
-            st.markdown(f"### {'🚨 가까운 응급실 찾기' if level == 2 else '🏥 가까운 병원 찾기'}")
+            title = "🚨 가까운 응급실 찾기" if level == 2 else "🏥 가까운 병원 찾기"
+            st.markdown(
+                f'<div class="hospital-header"><h3>{title}</h3></div>',
+                unsafe_allow_html=True,
+            )
 
             for key, default in [("hospitals_raw", []), ("hospital_city", "서울"), ("hospital_radius", 5)]:
                 if key not in st.session_state:
@@ -575,14 +649,15 @@ def main():
 
     else:
         st.markdown("""
-            <div style="text-align:center;padding:48px 24px;background:white;
-                border-radius:14px;border:2px dashed #cbd5e1;color:#94a3b8;margin-top:8px;">
-                <div style="font-size:3rem;margin-bottom:12px;">📸</div>
-                <p style="font-size:1rem;font-weight:600;color:#475569;margin:0 0 6px;">
+            <div style="text-align:center;padding:52px 24px;background:white;
+                border-radius:20px;border:2px dashed #cbd5e1;color:#94a3b8;margin-top:8px;
+                box-shadow:0 2px 12px rgba(0,0,0,0.04);">
+                <div style="font-size:3.4rem;margin-bottom:14px;filter:drop-shadow(0 2px 6px rgba(0,0,0,0.08));">📸</div>
+                <p style="font-size:1.05rem;font-weight:700;color:#334155;margin:0 0 8px;letter-spacing:-0.2px;">
                     사진을 업로드하면 분석이 시작됩니다
                 </p>
-                <p style="font-size:0.85rem;margin:0;">
-                    상처, 찰과상, 열상, 타박상 등 외상 부위를 찍어 올려주세요
+                <p style="font-size:0.85rem;margin:0;color:#94a3b8;line-height:1.6;">
+                    찰과상 · 열상 · 타박상 · 화상 · 출혈 부위 사진을 올려주세요
                 </p>
             </div>
         """, unsafe_allow_html=True)
