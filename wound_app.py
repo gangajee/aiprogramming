@@ -10,9 +10,9 @@ import sys
 import os
 import subprocess
 
-API_KEY       = os.environ.get("API_KEY", "")
-API_BASE      = "https://apis.data.go.kr/B552657/ErmctInfoInqireService"
-API_BASE_HOSP = "https://apis.data.go.kr/B551182/HsptlAsembySearchService"
+API_KEY        = os.environ.get("API_KEY", "")
+KAKAO_KEY      = os.environ.get("KAKAO_KEY", "")
+KAKAO_CATEGORY = "https://dapi.kakao.com/v2/local/search/category.json"
 
 CITIES = {
     "서울": (37.5665, 126.9780), "부산": (35.1796, 129.0756),
@@ -157,83 +157,51 @@ def _in_streamlit_ctx() -> bool:
         return False
 
 
-def fetch_nearby_hospitals(lat: float, lon: float, rows: int = 20) -> tuple[list[dict], str, dict]:
-    """Returns (hospitals, error_msg, debug_info).
-    1차: B551182/HsptlAsembySearchService (일반 병원 포함)
-    실패 시 2차: B552657/ErmctInfoInqireService (응급기관 전용)
+def fetch_nearby_hospitals(lat: float, lon: float, radius_m: int = 5000) -> tuple[list[dict], str, dict]:
+    """카카오 로컬 API — 반경 내 병원 검색 (HP8 카테고리).
+    Returns (hospitals, error_msg, debug_info).
     """
-    import requests, math
+    import requests
     debug = {}
-    if not API_KEY:
-        return [], "API_KEY가 설정되지 않았습니다.", debug
+    if not KAKAO_KEY:
+        return [], "KAKAO_KEY가 설정되지 않았습니다.", debug
 
-    def haversine(lat1, lon1, lat2, lon2):
-        R = 6371.0
-        dlat = math.radians(lat2 - lat1)
-        dlon = math.radians(lon2 - lon1)
-        a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
-        return R * 2 * math.asin(math.sqrt(a))
+    headers = {"Authorization": f"KakaoAK {KAKAO_KEY}"}
+    hospitals = []
 
-    def parse_items(data):
-        body = data.get("response", {}).get("body", {})
-        items = body.get("items")
-        if not items:
-            return []
-        item = items.get("item", [])
-        return item if isinstance(item, list) else [item]
+    # 최대 3페이지(45개)까지 수집
+    for page in range(1, 4):
+        try:
+            params = {
+                "category_group_code": "HP8",
+                "x": lon, "y": lat,
+                "radius": radius_m,
+                "sort": "distance",
+                "size": 15,
+                "page": page,
+            }
+            resp = requests.get(KAKAO_CATEGORY, headers=headers, params=params, timeout=8)
+            debug[f"status_p{page}"] = resp.status_code
+            data = resp.json()
 
-    # ── 1차 시도: 일반 병원 API ──────────────────────────────────────
-    try:
-        params = {
-            "serviceKey": API_KEY, "WGS84_LAT": lat, "WGS84_LON": lon,
-            "pageNo": 1, "numOfRows": rows, "_type": "json",
-        }
-        resp = requests.get(f"{API_BASE_HOSP}/getHsptlMdcncListInfoInqire",
-                            params=params, timeout=8)
-        debug["hosp_status"] = resp.status_code
-        data = resp.json()
-        header = data.get("response", {}).get("header", {})
-        debug["hosp_resultCode"] = header.get("resultCode")
-        debug["hosp_totalCount"] = data.get("response", {}).get("body", {}).get("totalCount", "?")
+            if resp.status_code != 200:
+                debug["error"] = data.get("message", "알 수 없는 오류")
+                break
 
-        if header.get("resultCode") == "00":
-            hospitals = parse_items(data)
-            if hospitals:
-                for h in hospitals:
-                    h_lat = h.get("wgs84Lat") or h.get("latitude")
-                    h_lon = h.get("wgs84Lon") or h.get("longitude")
-                    h["distance"] = round(haversine(lat, lon, float(h_lat), float(h_lon)), 2) if h_lat and h_lon else 9999
-                debug["source"] = "HsptlAsembySearchService"
-                return hospitals, "", debug
-    except Exception as e:
-        debug["hosp_error"] = str(e)
+            docs = data.get("documents", [])
+            for h in docs:
+                # distance 는 미터 단위 → km 변환
+                h["distance_km"] = round(int(h.get("distance", 0)) / 1000, 2)
+            hospitals.extend(docs)
 
-    # ── 2차 fallback: 응급의료기관 API ───────────────────────────────
-    try:
-        params = {
-            "serviceKey": API_KEY, "WGS84_LAT": lat, "WGS84_LON": lon,
-            "pageNo": 1, "numOfRows": 100, "_type": "json",
-        }
-        resp = requests.get(f"{API_BASE}/getEgytLcinfoInqire", params=params, timeout=8)
-        debug["ermt_status"] = resp.status_code
-        data = resp.json()
-        header = data.get("response", {}).get("header", {})
-        debug["ermt_resultCode"] = header.get("resultCode")
-        debug["ermt_totalCount"] = data.get("response", {}).get("body", {}).get("totalCount", "?")
+            if data.get("meta", {}).get("is_end", True):
+                break
+        except Exception as e:
+            debug[f"error_p{page}"] = str(e)
+            break
 
-        if header.get("resultCode") != "00":
-            return [], f"API 오류: {header.get('resultMsg', '알 수 없는 오류')}", debug
-
-        hospitals = parse_items(data)
-        for h in hospitals:
-            h_lat = h.get("wgs84Lat") or h.get("latitude")
-            h_lon = h.get("wgs84Lon") or h.get("longitude")
-            h["distance"] = round(haversine(lat, lon, float(h_lat), float(h_lon)), 2) if h_lat and h_lon else 9999
-        debug["source"] = "ErmctInfoInqireService (fallback)"
-        return hospitals, "", debug
-    except Exception as e:
-        debug["ermt_error"] = str(e)
-        return [], f"요청 실패: {e}", debug
+    debug["total"] = len(hospitals)
+    return hospitals, "", debug
 
 
 def main():
@@ -243,10 +211,15 @@ def main():
     import folium
     from streamlit_folium import st_folium
 
-    global API_KEY
+    global API_KEY, KAKAO_KEY
     if not API_KEY:
         try:
             API_KEY = st.secrets["API_KEY"]
+        except Exception:
+            pass
+    if not KAKAO_KEY:
+        try:
+            KAKAO_KEY = st.secrets["KAKAO_KEY"]
         except Exception:
             pass
 
@@ -626,32 +599,31 @@ def main():
                 unsafe_allow_html=True,
             )
 
-            for key, default in [("hospitals_raw", []), ("hospital_city", "서울")]:
+            for key, default in [("hospitals_raw", []), ("hospital_city", "서울"), ("hospital_radius", 5)]:
                 if key not in st.session_state:
                     st.session_state[key] = default
 
             city       = st.selectbox("현재 위치 (도시 선택)", options=list(CITIES.keys()))
+            radius_km  = st.slider("검색 반경 (km)", min_value=1, max_value=15, value=5)
             search_btn = st.button("병원 검색", type="primary", use_container_width=True)
 
             if search_btn:
                 lat, lon = CITIES[city]
-                with st.spinner("주변 응급의료기관을 검색 중입니다..."):
-                    raw, err, _ = fetch_nearby_hospitals(lat, lon, rows=100)
-                    st.session_state.hospitals_raw  = raw
-                    st.session_state.hospital_error = err
-                    st.session_state.hospital_city  = city
+                with st.spinner("주변 병원을 검색 중입니다..."):
+                    raw, err, dbg = fetch_nearby_hospitals(lat, lon, radius_m=radius_km * 1000)
+                    st.session_state.hospitals_raw   = raw
+                    st.session_state.hospital_error  = err
+                    st.session_state.hospital_debug  = dbg
+                    st.session_state.hospital_city   = city
+                    st.session_state.hospital_radius = radius_km
 
             if st.session_state.get("hospital_error"):
                 st.error(f"병원 검색 오류: {st.session_state.hospital_error}")
 
-            # radius 필터 없이 거리순 정렬 후 전체 표시
-            hospitals = sorted(
-                [h for h in st.session_state.hospitals_raw if h.get("distance") is not None],
-                key=lambda h: float(h.get("distance", 9999)),
-            )
+            hospitals = st.session_state.hospitals_raw  # 이미 거리순 정렬됨
 
             if search_btn and not hospitals and not st.session_state.get("hospital_error"):
-                st.warning("검색 결과가 없습니다. 다른 도시를 선택해 보세요.")
+                st.warning("검색 결과가 없습니다. 반경을 늘리거나 다른 도시를 선택해 보세요.")
                 dbg = st.session_state.get("hospital_debug", {})
                 if dbg:
                     with st.expander("🔍 API 진단 정보"):
@@ -659,8 +631,14 @@ def main():
 
             if hospitals:
                 lat, lon = CITIES[st.session_state.hospital_city]
-                m = folium.Map(location=[lat, lon], zoom_start=11, tiles="CartoDB positron")
+                r_km = st.session_state.hospital_radius
+                m = folium.Map(location=[lat, lon], zoom_start=13, tiles="CartoDB positron")
 
+                # 검색 반경 원
+                folium.Circle(
+                    location=[lat, lon], radius=r_km * 1000,
+                    color="#6366f1", weight=1.5, fill=True, fill_opacity=0.05,
+                ).add_to(m)
                 folium.CircleMarker(
                     location=[lat, lon], radius=10, color="white", weight=3,
                     fill=True, fill_color="#1e40af", fill_opacity=1.0, tooltip="📍 현재 위치",
@@ -670,18 +648,18 @@ def main():
                 pin_border = "#7f1d1d" if level == 2 else "#713f12"
 
                 for h in hospitals:
-                    h_lat = h.get("wgs84Lat") or h.get("latitude")
-                    h_lon = h.get("wgs84Lon") or h.get("longitude")
+                    h_lat = h.get("y")   # 카카오: y=위도, x=경도
+                    h_lon = h.get("x")
                     if not h_lat or not h_lon:
                         continue
-                    name = h.get("dutyName", "병원")
-                    dist = h.get("distance", "-")
+                    name = h.get("place_name", "병원")
+                    dist = h.get("distance_km", "-")
                     popup_html = (
                         f"<div style='font-size:13px;line-height:1.6'>"
                         f"<b style='font-size:14px'>{name}</b><br>"
-                        f"🏷 {h.get('dutyDivName','-')}<br>"
-                        f"📍 {h.get('dutyAddr','-')}<br>"
-                        f"☎ {h.get('dutyTel1','-')}<br>"
+                        f"🏷 {h.get('category_name','-').split(' > ')[-1]}<br>"
+                        f"📍 {h.get('road_address_name') or h.get('address_name','-')}<br>"
+                        f"☎ {h.get('phone','-') or '-'}<br>"
                         f"📏 {dist}km</div>"
                     )
                     folium.CircleMarker(
@@ -694,12 +672,14 @@ def main():
 
                 st_folium(m, width=700, height=450, returned_objects=[])
 
-                st.markdown(f"**가까운 응급의료기관 ({len(hospitals)}개) — 거리순**")
+                st.markdown(f"**반경 {r_km}km 내 병원 ({len(hospitals)}개) — 거리순**")
                 st.dataframe(
                     pd.DataFrame([{
-                        "기관명": h.get("dutyName", "-"), "분류": h.get("dutyDivName", "-"),
-                        "거리(km)": h.get("distance", "-"), "전화번호": h.get("dutyTel1", "-"),
-                        "주소": h.get("dutyAddr", "-"),
+                        "기관명": h.get("place_name", "-"),
+                        "분류": h.get("category_name", "-").split(" > ")[-1],
+                        "거리(km)": h.get("distance_km", "-"),
+                        "전화번호": h.get("phone", "-") or "-",
+                        "주소": h.get("road_address_name") or h.get("address_name", "-"),
                     } for h in hospitals]),
                     use_container_width=True, hide_index=True,
                 )
