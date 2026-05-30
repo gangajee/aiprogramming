@@ -10,8 +10,9 @@ import sys
 import os
 import subprocess
 
-API_KEY  = os.environ.get("API_KEY", "")
-API_BASE = "https://apis.data.go.kr/B552657/ErmctInfoInqireService"
+API_KEY       = os.environ.get("API_KEY", "")
+API_BASE      = "https://apis.data.go.kr/B552657/ErmctInfoInqireService"
+API_BASE_HOSP = "https://apis.data.go.kr/B551182/HsptlAsembySearchService"
 
 CITIES = {
     "서울": (37.5665, 126.9780), "부산": (35.1796, 129.0756),
@@ -156,59 +157,82 @@ def _in_streamlit_ctx() -> bool:
         return False
 
 
-def fetch_nearby_hospitals(lat: float, lon: float, rows: int = 100) -> tuple[list[dict], str, dict]:
-    """Returns (hospitals, error_msg, debug_info)."""
+def fetch_nearby_hospitals(lat: float, lon: float, rows: int = 20) -> tuple[list[dict], str, dict]:
+    """Returns (hospitals, error_msg, debug_info).
+    1차: B551182/HsptlAsembySearchService (일반 병원 포함)
+    실패 시 2차: B552657/ErmctInfoInqireService (응급기관 전용)
+    """
     import requests, math
     debug = {}
     if not API_KEY:
         return [], "API_KEY가 설정되지 않았습니다.", debug
 
-    params = {
-        "serviceKey": API_KEY, "WGS84_LAT": lat, "WGS84_LON": lon,
-        "pageNo": 1, "numOfRows": rows, "_type": "json",
-    }
+    def haversine(lat1, lon1, lat2, lon2):
+        R = 6371.0
+        dlat = math.radians(lat2 - lat1)
+        dlon = math.radians(lon2 - lon1)
+        a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
+        return R * 2 * math.asin(math.sqrt(a))
+
+    def parse_items(data):
+        body = data.get("response", {}).get("body", {})
+        items = body.get("items")
+        if not items:
+            return []
+        item = items.get("item", [])
+        return item if isinstance(item, list) else [item]
+
+    # ── 1차 시도: 일반 병원 API ──────────────────────────────────────
     try:
-        resp = requests.get(f"{API_BASE}/getEgytLcinfoInqire", params=params, timeout=8)
-        debug["status_code"] = resp.status_code
+        params = {
+            "serviceKey": API_KEY, "WGS84_LAT": lat, "WGS84_LON": lon,
+            "pageNo": 1, "numOfRows": rows, "_type": "json",
+        }
+        resp = requests.get(f"{API_BASE_HOSP}/getHsptlMdcncListInfoInqire",
+                            params=params, timeout=8)
+        debug["hosp_status"] = resp.status_code
         data = resp.json()
         header = data.get("response", {}).get("header", {})
-        debug["resultCode"] = header.get("resultCode")
-        debug["resultMsg"]  = header.get("resultMsg")
-        debug["totalCount"] = data.get("response", {}).get("body", {}).get("totalCount", "?")
+        debug["hosp_resultCode"] = header.get("resultCode")
+        debug["hosp_totalCount"] = data.get("response", {}).get("body", {}).get("totalCount", "?")
+
+        if header.get("resultCode") == "00":
+            hospitals = parse_items(data)
+            if hospitals:
+                for h in hospitals:
+                    h_lat = h.get("wgs84Lat") or h.get("latitude")
+                    h_lon = h.get("wgs84Lon") or h.get("longitude")
+                    h["distance"] = round(haversine(lat, lon, float(h_lat), float(h_lon)), 2) if h_lat and h_lon else 9999
+                debug["source"] = "HsptlAsembySearchService"
+                return hospitals, "", debug
+    except Exception as e:
+        debug["hosp_error"] = str(e)
+
+    # ── 2차 fallback: 응급의료기관 API ───────────────────────────────
+    try:
+        params = {
+            "serviceKey": API_KEY, "WGS84_LAT": lat, "WGS84_LON": lon,
+            "pageNo": 1, "numOfRows": 100, "_type": "json",
+        }
+        resp = requests.get(f"{API_BASE}/getEgytLcinfoInqire", params=params, timeout=8)
+        debug["ermt_status"] = resp.status_code
+        data = resp.json()
+        header = data.get("response", {}).get("header", {})
+        debug["ermt_resultCode"] = header.get("resultCode")
+        debug["ermt_totalCount"] = data.get("response", {}).get("body", {}).get("totalCount", "?")
 
         if header.get("resultCode") != "00":
-            return [], f"API 오류 ({header.get('resultCode')}): {header.get('resultMsg', '알 수 없는 오류')}", debug
+            return [], f"API 오류: {header.get('resultMsg', '알 수 없는 오류')}", debug
 
-        items = data["response"]["body"]["items"]
-        if not items:
-            return [], "", debug
-
-        item = items["item"]
-        hospitals = item if isinstance(item, list) else [item]
-        debug["raw_count"] = len(hospitals)
-
-        # 첫 번째 항목의 키 목록 확인용
-        if hospitals:
-            debug["sample_keys"] = list(hospitals[0].keys())
-            debug["sample_lat"]  = hospitals[0].get("wgs84Lat")
-            debug["sample_lon"]  = hospitals[0].get("wgs84Lon")
-
-        def haversine(lat1, lon1, lat2, lon2):
-            R = 6371.0
-            dlat = math.radians(lat2 - lat1)
-            dlon = math.radians(lon2 - lon1)
-            a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
-            return R * 2 * math.asin(math.sqrt(a))
-
+        hospitals = parse_items(data)
         for h in hospitals:
             h_lat = h.get("wgs84Lat") or h.get("latitude")
             h_lon = h.get("wgs84Lon") or h.get("longitude")
             h["distance"] = round(haversine(lat, lon, float(h_lat), float(h_lon)), 2) if h_lat and h_lon else 9999
-
-        debug["no_coord_count"] = sum(1 for h in hospitals if h.get("distance") == 9999)
+        debug["source"] = "ErmctInfoInqireService (fallback)"
         return hospitals, "", debug
     except Exception as e:
-        debug["exception"] = str(e)
+        debug["ermt_error"] = str(e)
         return [], f"요청 실패: {e}", debug
 
 
@@ -628,6 +652,10 @@ def main():
 
             if search_btn and not hospitals and not st.session_state.get("hospital_error"):
                 st.warning("검색 결과가 없습니다. 다른 도시를 선택해 보세요.")
+                dbg = st.session_state.get("hospital_debug", {})
+                if dbg:
+                    with st.expander("🔍 API 진단 정보"):
+                        st.json(dbg)
 
             if hospitals:
                 lat, lon = CITIES[st.session_state.hospital_city]
