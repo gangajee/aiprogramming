@@ -116,18 +116,34 @@ BADGE_COLORS = {
 }
 
 
-def _has_skin(pil_image, min_ratio: float = 0.04) -> bool:
-    """YCbCr 기반 피부색 검출 — 인체 피부 영역이 없으면 외상 사진이 아님."""
+def _has_skin(pil_image, min_skin: float = 0.04, min_wound: float = 0.010) -> bool:
+    """피부 맥락 + 상처 색상 지표 이중 검사.
+
+    1단계) 정상 피부 픽셀이 4% 이상 — 피부가 없는 사물(사과 등) 제거
+    2단계) 상처 지표 픽셀이 1% 이상 — 정상 피부 사진(상처 없음) 추가 제거
+    """
     import numpy as np
     arr = np.array(pil_image.convert("RGB").resize((128, 128)), dtype=np.float32)
     R, G, B = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
     Y  =  0.299 * R + 0.587 * G + 0.114 * B
     Cb = 128 - 0.16874 * R - 0.33126 * G + 0.5   * B
     Cr = 128 + 0.5     * R - 0.41869 * G - 0.08131 * B
-    # 표준 피부색 범위 (다양한 피부톤 포용, 사과·토마토 등 제외)
-    # Cr < 167 로 사과·토마토 황적색 픽셀 제외, min_ratio=0.04로 줄기만 있는 경우 제외
+
+    # 1단계: 정상 피부 픽셀 (Cr 133–167: 사과·토마토 황적색 제외)
     skin_mask = (Y > 60) & (Y < 220) & (Cb > 77) & (Cb < 127) & (Cr > 133) & (Cr < 167)
-    return float(np.mean(skin_mask)) >= min_ratio
+    if float(np.mean(skin_mask)) < min_skin:
+        return False
+
+    # 2단계: 상처 색상 지표 픽셀
+    # 발적/찰과상/열상: 정상 피부 Cr 상한(167) 초과 — "피부보다 더 붉은" 영역
+    wound_red = (Cr > 167) & (Y > 40) & (Y < 220) & (Cb < 125)
+    # 멍/타박상: 어두운 자주빛 (낮은 밝기 + 피부 Cb 범주)
+    bruise    = (Y < 78) & (Cr > 118) & (Cb > 82) & (Cb < 142)
+    # 화상/물집: 극도로 밝은 창백 영역
+    burn_pale = (Y > 212) & (Cb > 78) & (Cb < 122)
+
+    wound_ratio = float(np.mean(wound_red | bruise | burn_pale))
+    return wound_ratio >= min_wound
 
 
 def _in_streamlit_ctx() -> bool:
