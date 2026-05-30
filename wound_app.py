@@ -39,7 +39,11 @@ MODEL_TO_DISPLAY = {
     "출혈성_상처": "출혈성 상처",
     "열상": "열상", "찰과상": "찰과상",
     "타박상": "타박상", "화상": "화상",
+    "정상": "정상",
 }
+
+# 외상 신뢰도 최소 임계값 — 이 미만이면 "외상 아님" 처리
+WOUND_CONFIDENCE_THRESHOLD = 0.38
 
 # Model B 클래스 → 게이지 구간 중심값 (자가0-33 / 병원33-66 / 응급66-100)
 ZONE_PCT = {"자가처치": 16.5, "일반병원": 49.5, "응급실": 83.0}
@@ -258,16 +262,23 @@ def main():
             # Model A: 진단명
             if USE_TYPE:
                 type_proba = _tflite_run(type_model, arr)
+                top_idx = int(np.argmax(type_proba))
+                top_conf = float(type_proba[top_idx])
+                top_cls  = MODEL_TO_DISPLAY.get(type_classes[top_idx], type_classes[top_idx])
+
+                # 신뢰도 미달 또는 정상 클래스 → 외상 아님
+                if top_conf < WOUND_CONFIDENCE_THRESHOLD or top_cls == "정상":
+                    return -1, 0.0, [], None, {}, {}
+
                 raw = [type_classes[i] for i in np.argsort(type_proba)[::-1] if type_proba[i] >= 0.15][:2]
-                if not raw:
-                    raw = [type_classes[int(np.argmax(type_proba))]]
                 disp = [MODEL_TO_DISPLAY.get(c, c) for c in raw]
                 detected = sorted(
                     [d for d in disp if d in SEVERITY_ORDER],
                     key=lambda x: SEVERITY_ORDER.index(x),
                 ) or disp[:1]
                 primary_type = detected[0]
-                type_detail = {MODEL_TO_DISPLAY.get(c, c): f"{type_proba[i]:.1%}" for i, c in enumerate(type_classes)}
+                type_detail = {MODEL_TO_DISPLAY.get(c, c): f"{type_proba[i]:.1%}" for i, c in enumerate(type_classes)
+                               if MODEL_TO_DISPLAY.get(c, c) != "정상"}
             else:
                 detected, primary_type, type_detail = ["부종·염좌 의심"], "부종·염좌 의심", {}
 
@@ -348,6 +359,23 @@ def main():
 
         with st.spinner("AI가 사진을 분석하고 있습니다..."):
             level, bar_pct, detected, primary_type, type_detail, sev_detail = analyze_wound(image)
+
+        if level == -1:
+            st.markdown("""
+                <div style="background:#fef2f2;border:2px solid #dc2626;border-radius:14px;
+                            padding:28px 24px;margin-top:20px;text-align:center;">
+                    <div style="font-size:2.4rem;">⚠️</div>
+                    <h2 style="color:#7f1d1d;margin:10px 0 6px;">외상이 감지되지 않았습니다</h2>
+                    <p style="color:#991b1b;font-size:0.95rem;margin:0 0 12px;">
+                        업로드한 사진에서 상처나 외상을 찾을 수 없습니다.
+                    </p>
+                    <p style="color:#7f1d1d;font-size:0.88rem;margin:0;">
+                        📸 <strong>외상 부위를 가까이 촬영한 사진</strong>을 다시 업로드해 주세요.<br>
+                        찰과상 · 열상 · 타박상 · 화상 · 출혈 부위 등의 사진에 최적화되어 있습니다.
+                    </p>
+                </div>
+            """, unsafe_allow_html=True)
+            st.stop()
 
         meta = LEVELS[level]
 

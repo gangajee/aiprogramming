@@ -25,10 +25,22 @@ EPOCHS_FINE   = 10
 def load_datasets():
     augmentation = keras.Sequential([
         keras.layers.RandomFlip("horizontal"),
-        keras.layers.RandomRotation(0.15),
-        keras.layers.RandomZoom(0.10),
-        keras.layers.RandomBrightness(0.20),
-        keras.layers.RandomContrast(0.15),
+        keras.layers.RandomFlip("vertical"),
+        keras.layers.RandomRotation(0.25),
+        keras.layers.RandomZoom(0.15),
+        keras.layers.RandomTranslation(0.10, 0.10),
+        # 색상 과적합 방지: 붉은 기/밝기에 의존하지 않도록 범위 확대
+        keras.layers.RandomBrightness(0.40),
+        keras.layers.RandomContrast(0.40),
+        # 색조 변환 — 붉은 사과·토마토 등 오인 방지
+        keras.layers.Lambda(
+            lambda x: tf.image.random_hue(x / 255.0, 0.08) * 255.0,
+            name="random_hue",
+        ),
+        keras.layers.Lambda(
+            lambda x: tf.image.random_saturation(x / 255.0, 0.6, 1.5) * 255.0,
+            name="random_saturation",
+        ),
     ], name="augmentation")
     preprocess = keras.applications.mobilenet_v2.preprocess_input
 

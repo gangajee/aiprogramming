@@ -37,7 +37,7 @@ SOURCE2_MAP = {
     "Cut":             ("열상",      1),
     "Diabetic Wounds": ("감염_의심", 1),
     "Laseration":      ("열상",      1),
-    "Normal":          None,
+    "Normal":          ("정상", None),   # 음성 샘플 — Model A에만 포함, Model B 제외
     "Pressure Wounds": ("부종_염좌", 1),
     "Surgical Wounds": ("열상",      1),
     "Venous Wounds":   ("감염_의심", 1),
@@ -75,7 +75,8 @@ def collect(root: Path, cls_map: dict) -> tuple[dict, dict]:
             continue
         print(f"    {cls_dir.name:20s} → {wt:12s}  sev={sev}  ({len(images)}장)")
         type_imgs.setdefault(wt, []).extend(images)
-        sev_imgs.setdefault(sev, []).extend(images)
+        if sev is not None:   # 정상 클래스는 심각도 모델에 포함하지 않음
+            sev_imgs.setdefault(sev, []).extend(images)
     return type_imgs, sev_imgs
 
 
